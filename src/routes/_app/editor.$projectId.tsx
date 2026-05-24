@@ -432,6 +432,21 @@ function EditorPage() {
           </div>
         </div>
       </section>
+
+      <ExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        projectTitle={title}
+        clips={clips.filter((c) => !!c.url).map((c) => ({
+          id: c.id,
+          url: c.url!,
+          name: c.name,
+          start: c.start,
+          duration: c.duration,
+        }))}
+        overlays={overlays}
+        adjustments={adj}
+      />
     </div>
   );
 }
