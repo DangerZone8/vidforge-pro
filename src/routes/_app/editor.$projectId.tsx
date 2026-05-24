@@ -43,6 +43,7 @@ function EditorPage() {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [activePanel, setActivePanel] = useState<"media" | "text" | "effects">("media");
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -219,7 +220,7 @@ function EditorPage() {
           <Button variant="ghost" size="sm" onClick={() => saveProject.mutate()} disabled={saveProject.isPending}>
             {saveProject.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Save
           </Button>
-          <Button size="sm" className="bg-studio-accent hover:bg-studio-accent/90 text-white" onClick={() => toast.info("Export coming soon — will use FFmpeg.wasm to render to MP4")}>
+          <Button size="sm" className="bg-studio-accent hover:bg-studio-accent/90 text-white" onClick={() => setExportOpen(true)}>
             <Download className="size-4" /> Export
           </Button>
         </div>
