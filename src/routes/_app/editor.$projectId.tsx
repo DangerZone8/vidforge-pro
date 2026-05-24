@@ -9,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { ArrowLeft, Upload, Play, Pause, Type, Sparkles, Download, Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ExportDialog } from "@/components/export-dialog";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,

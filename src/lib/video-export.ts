@@ -211,8 +211,11 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
   }
 
   progress(97, "Finalizing");
-  const data = await ff.readFile("out.mp4");
-  const blob = new Blob([data as Uint8Array], { type: "video/mp4" });
+  const data = (await ff.readFile("out.mp4")) as Uint8Array;
+  // Copy into a fresh ArrayBuffer to satisfy strict BlobPart typing.
+  const buf = new Uint8Array(data.byteLength);
+  buf.set(data);
+  const blob = new Blob([buf.buffer], { type: "video/mp4" });
 
   // Cleanup virtual FS.
   for (let i = 0; i < opts.clips.length; i++) {
