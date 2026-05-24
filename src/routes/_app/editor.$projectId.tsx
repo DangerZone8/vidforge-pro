@@ -9,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { ArrowLeft, Upload, Play, Pause, Type, Sparkles, Download, Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ExportDialog } from "@/components/export-dialog";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
@@ -42,6 +43,7 @@ function EditorPage() {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [activePanel, setActivePanel] = useState<"media" | "text" | "effects">("media");
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -218,7 +220,7 @@ function EditorPage() {
           <Button variant="ghost" size="sm" onClick={() => saveProject.mutate()} disabled={saveProject.isPending}>
             {saveProject.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Save
           </Button>
-          <Button size="sm" className="bg-studio-accent hover:bg-studio-accent/90 text-white" onClick={() => toast.info("Export coming soon — will use FFmpeg.wasm to render to MP4")}>
+          <Button size="sm" className="bg-studio-accent hover:bg-studio-accent/90 text-white" onClick={() => setExportOpen(true)}>
             <Download className="size-4" /> Export
           </Button>
         </div>
@@ -430,6 +432,21 @@ function EditorPage() {
           </div>
         </div>
       </section>
+
+      <ExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        projectTitle={title}
+        clips={clips.filter((c) => !!c.url).map((c) => ({
+          id: c.id,
+          url: c.url!,
+          name: c.name,
+          start: c.start,
+          duration: c.duration,
+        }))}
+        overlays={overlays}
+        adjustments={adj}
+      />
     </div>
   );
 }
