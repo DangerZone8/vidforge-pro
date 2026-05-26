@@ -46,6 +46,8 @@ type Clip = {
   bgColor?: string;
   bgImageUrl?: string | null;
   faceFilter?: string | null;
+  // VFX preset (color grade + overlay)
+  vfxPresetId?: string | null;
 };
 
 type AudioClip = {
