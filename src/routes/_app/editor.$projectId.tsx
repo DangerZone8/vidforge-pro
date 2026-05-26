@@ -130,20 +130,38 @@ function EditorPage() {
   });
 
   // ---- Media upload ----
-  async function handleFiles(files: FileList | null) {
+  function sanitizeName(name: string) {
+    const dot = name.lastIndexOf(".");
+    const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60);
+    const ext = (dot > 0 ? name.slice(dot + 1) : "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase().slice(0, 8);
+    return ext ? `${base}.${ext}` : base || "file";
+  }
+
+  async function handleFiles(files: FileList | null | File[]) {
     if (!files || !user) return;
-    for (const file of Array.from(files)) {
-      const kind = file.type.startsWith("video") ? "video" : file.type.startsWith("audio") ? "audio" : "image";
-      const path = `${user.id}/${projectId}/${Date.now()}-${file.name}`;
-      const { error: uErr } = await supabase.storage.from("media").upload(path, file, { contentType: file.type });
-      if (uErr) { toast.error(uErr.message); continue; }
-      await supabase.from("media_files").insert({
-        user_id: user.id, project_id: projectId, name: file.name,
-        storage_path: path, mime_type: file.type, size_bytes: file.size, kind,
+    const arr = Array.from(files as ArrayLike<File>);
+    if (arr.length === 0) return;
+    let ok = 0;
+    for (const file of arr) {
+      const kind: "video" | "audio" | "image" =
+        file.type.startsWith("video") ? "video" :
+        file.type.startsWith("audio") ? "audio" :
+        file.type.startsWith("image") ? "image" : "video";
+      const path = `${user.id}/${projectId}/${Date.now()}-${sanitizeName(file.name)}`;
+      const { error: uErr } = await supabase.storage.from("media").upload(path, file, {
+        contentType: file.type || (kind === "image" ? "image/jpeg" : kind === "audio" ? "audio/mpeg" : "video/mp4"),
+        upsert: false,
       });
+      if (uErr) { toast.error(`${file.name}: ${uErr.message}`); continue; }
+      const { error: mErr } = await supabase.from("media_files").insert({
+        user_id: user.id, project_id: projectId, name: file.name,
+        storage_path: path, mime_type: file.type || null, size_bytes: file.size, kind,
+      });
+      if (mErr) { toast.error(`${file.name}: ${mErr.message}`); continue; }
+      ok++;
     }
     refetchMedia();
-    toast.success(`${files.length} file(s) uploaded`);
+    if (ok > 0) toast.success(`${ok} file(s) uploaded`);
   }
 
   async function addClipFromMedia(m: any) {
@@ -154,7 +172,7 @@ function EditorPage() {
       probe.src = m.url;
       probe.onloadedmetadata = () => {
         const newClip: Clip = {
-          id: crypto.randomUUID(), mediaId: m.id, name: m.name,
+          id: crypto.randomUUID(), mediaId: m.id, name: m.name, kind: "video",
           start, duration: probe.duration || 5, url: m.url,
           bgRemove: false, bgMode: "color", bgColor: "#0a0a14", bgImageUrl: null, faceFilter: null,
         };
@@ -163,8 +181,16 @@ function EditorPage() {
       };
     } else if (m.kind === "audio") {
       addAudioFromUrl(m.url, m.name);
-    } else {
-      toast.info("Image clips not supported yet — use as background instead");
+    } else if (m.kind === "image") {
+      const start = clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0);
+      const newClip: Clip = {
+        id: crypto.randomUUID(), mediaId: m.id, name: m.name, kind: "image",
+        start, duration: 5, url: m.url,
+        bgRemove: false, bgMode: "color", bgColor: "#0a0a14", bgImageUrl: null, faceFilter: null,
+      };
+      setClips((c) => [...c, newClip]);
+      setSelectedClipId(newClip.id);
+      toast.success(`Added image "${m.name}" — adjust duration in the inspector`);
     }
   }
 
