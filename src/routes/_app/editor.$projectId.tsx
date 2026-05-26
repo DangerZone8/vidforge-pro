@@ -32,6 +32,7 @@ type Clip = {
   id: string;
   mediaId: string;
   name: string;
+  kind: "video" | "image";
   start: number;
   duration: number;
   url?: string;
@@ -129,20 +130,38 @@ function EditorPage() {
   });
 
   // ---- Media upload ----
-  async function handleFiles(files: FileList | null) {
+  function sanitizeName(name: string) {
+    const dot = name.lastIndexOf(".");
+    const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60);
+    const ext = (dot > 0 ? name.slice(dot + 1) : "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase().slice(0, 8);
+    return ext ? `${base}.${ext}` : base || "file";
+  }
+
+  async function handleFiles(files: FileList | null | File[]) {
     if (!files || !user) return;
-    for (const file of Array.from(files)) {
-      const kind = file.type.startsWith("video") ? "video" : file.type.startsWith("audio") ? "audio" : "image";
-      const path = `${user.id}/${projectId}/${Date.now()}-${file.name}`;
-      const { error: uErr } = await supabase.storage.from("media").upload(path, file, { contentType: file.type });
-      if (uErr) { toast.error(uErr.message); continue; }
-      await supabase.from("media_files").insert({
-        user_id: user.id, project_id: projectId, name: file.name,
-        storage_path: path, mime_type: file.type, size_bytes: file.size, kind,
+    const arr = Array.from(files as ArrayLike<File>);
+    if (arr.length === 0) return;
+    let ok = 0;
+    for (const file of arr) {
+      const kind: "video" | "audio" | "image" =
+        file.type.startsWith("video") ? "video" :
+        file.type.startsWith("audio") ? "audio" :
+        file.type.startsWith("image") ? "image" : "video";
+      const path = `${user.id}/${projectId}/${Date.now()}-${sanitizeName(file.name)}`;
+      const { error: uErr } = await supabase.storage.from("media").upload(path, file, {
+        contentType: file.type || (kind === "image" ? "image/jpeg" : kind === "audio" ? "audio/mpeg" : "video/mp4"),
+        upsert: false,
       });
+      if (uErr) { toast.error(`${file.name}: ${uErr.message}`); continue; }
+      const { error: mErr } = await supabase.from("media_files").insert({
+        user_id: user.id, project_id: projectId, name: file.name,
+        storage_path: path, mime_type: file.type || null, size_bytes: file.size, kind,
+      });
+      if (mErr) { toast.error(`${file.name}: ${mErr.message}`); continue; }
+      ok++;
     }
     refetchMedia();
-    toast.success(`${files.length} file(s) uploaded`);
+    if (ok > 0) toast.success(`${ok} file(s) uploaded`);
   }
 
   async function addClipFromMedia(m: any) {
@@ -153,7 +172,7 @@ function EditorPage() {
       probe.src = m.url;
       probe.onloadedmetadata = () => {
         const newClip: Clip = {
-          id: crypto.randomUUID(), mediaId: m.id, name: m.name,
+          id: crypto.randomUUID(), mediaId: m.id, name: m.name, kind: "video",
           start, duration: probe.duration || 5, url: m.url,
           bgRemove: false, bgMode: "color", bgColor: "#0a0a14", bgImageUrl: null, faceFilter: null,
         };
@@ -162,8 +181,16 @@ function EditorPage() {
       };
     } else if (m.kind === "audio") {
       addAudioFromUrl(m.url, m.name);
-    } else {
-      toast.info("Image clips not supported yet — use as background instead");
+    } else if (m.kind === "image") {
+      const start = clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0);
+      const newClip: Clip = {
+        id: crypto.randomUUID(), mediaId: m.id, name: m.name, kind: "image",
+        start, duration: 5, url: m.url,
+        bgRemove: false, bgMode: "color", bgColor: "#0a0a14", bgImageUrl: null, faceFilter: null,
+      };
+      setClips((c) => [...c, newClip]);
+      setSelectedClipId(newClip.id);
+      toast.success(`Added image "${m.name}" — adjust duration in the inspector`);
     }
   }
 
@@ -354,23 +381,43 @@ function EditorPage() {
           <div className="flex-1 overflow-y-auto p-3">
             {activePanel === "media" && (
               <div className="space-y-3">
-                <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="w-full">
-                  <Upload className="size-4" /> Upload media
-                </Button>
-                <input ref={fileInputRef} type="file" hidden multiple accept="video/*,audio/*,image/*" onChange={(e) => handleFiles(e.target.files)} />
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-studio-accent"); }}
+                  onDragLeave={(e) => e.currentTarget.classList.remove("border-studio-accent")}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove("border-studio-accent");
+                    handleFiles(e.dataTransfer.files);
+                  }}
+                  className="w-full cursor-pointer border-2 border-dashed border-studio-border rounded-lg p-4 text-center hover:border-studio-accent/60 transition-colors"
+                >
+                  <Upload className="size-5 mx-auto mb-1 text-studio-muted" />
+                  <p className="text-xs font-medium">Drop or click to upload</p>
+                  <p className="text-[10px] text-studio-muted">Video, image or audio</p>
+                </div>
+                <input ref={fileInputRef} type="file" hidden multiple accept="video/*,audio/*,image/*" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
                 <div className="grid grid-cols-2 gap-2">
                   {media.map((m) => (
                     <button key={m.id} onClick={() => addClipFromMedia(m)}
                       className="group aspect-square bg-zinc-900 rounded-lg outline outline-1 -outline-offset-1 outline-white/5 hover:outline-studio-accent transition-all relative overflow-hidden">
                       {m.kind === "video" && m.url ? (
-                        <video src={m.url} className="w-full h-full object-cover" muted />
+                        <video src={m.url} className="w-full h-full object-cover" muted preload="metadata" />
                       ) : m.kind === "image" && m.url ? (
                         <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full grid place-items-center text-studio-muted">
-                          {m.kind === "audio" ? <Music className="size-6" /> : <ImageIcon className="size-6" />}
+                          <Music className="size-6" />
                         </div>
                       )}
+                      <span className={cn(
+                        "absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider",
+                        m.kind === "video" && "bg-studio-accent/80 text-white",
+                        m.kind === "image" && "bg-emerald-500/80 text-white",
+                        m.kind === "audio" && "bg-amber-500/80 text-black",
+                      )}>
+                        {m.kind}
+                      </span>
                       <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-black/70 text-[9px] truncate text-left">{m.name}</div>
                     </button>
                   ))}
@@ -380,6 +427,8 @@ function EditorPage() {
                 )}
               </div>
             )}
+
+
 
             {activePanel === "sounds" && (
               <div className="space-y-3">
@@ -484,18 +533,32 @@ function EditorPage() {
         <div className="flex-1 bg-black flex flex-col min-w-0">
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="relative w-full max-w-5xl aspect-video bg-zinc-900 rounded-xl overflow-hidden shadow-2xl">
-              <PreviewCanvas
-                src={activeClip?.url ?? null}
-                localTime={activeClip ? currentTime - activeClip.start : 0}
-                playing={playing && !!activeClip}
-                adjustmentFilter={filterStyle}
-                bgRemove={!!activeClip?.bgRemove}
-                bgMode={activeClip?.bgMode ?? "color"}
-                bgColor={activeClip?.bgColor ?? "#0a0a14"}
-                bgImageUrl={activeClip?.bgImageUrl ?? null}
-                faceFilter={activeClip?.faceFilter ?? null}
-                onEnded={() => setPlaying(false)}
-              />
+              {activeClip && (activeClip.bgMode === "image" && activeClip.bgImageUrl ? (
+                <img src={activeClip.bgImageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+              ) : activeClip.bgColor && activeClip.kind === "image" ? (
+                <div className="absolute inset-0" style={{ background: activeClip.bgColor }} />
+              ) : null)}
+              {activeClip?.kind === "image" ? (
+                <img
+                  src={activeClip.url}
+                  alt={activeClip.name}
+                  className="relative w-full h-full object-contain"
+                  style={{ filter: filterStyle }}
+                />
+              ) : (
+                <PreviewCanvas
+                  src={activeClip?.url ?? null}
+                  localTime={activeClip ? currentTime - activeClip.start : 0}
+                  playing={playing && !!activeClip}
+                  adjustmentFilter={filterStyle}
+                  bgRemove={!!activeClip?.bgRemove}
+                  bgMode={activeClip?.bgMode ?? "color"}
+                  bgColor={activeClip?.bgColor ?? "#0a0a14"}
+                  bgImageUrl={activeClip?.bgImageUrl ?? null}
+                  faceFilter={activeClip?.faceFilter ?? null}
+                  onEnded={() => setPlaying(false)}
+                />
+              )}
               {activeOverlay && (
                 <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none">
                   <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>
@@ -536,49 +599,86 @@ function EditorPage() {
               <AdjustSlider label="Blur" value={adj.blur} min={0} max={10} onChange={(v) => setAdj({ ...adj, blur: v })} />
             </Section>
 
-            {/* Background removal */}
-            <Section title="Background removal" icon={<Wand2 className="size-3.5 text-studio-accent" />}>
+            {/* Clip properties (image clips) */}
+            {selectedClip?.kind === "image" && (
+              <Section title="Image clip" icon={<ImageIcon className="size-3.5 text-studio-accent" />}>
+                <AdjustSlider
+                  label="Duration (s)"
+                  value={Math.round(selectedClip.duration)}
+                  min={1}
+                  max={60}
+                  onChange={(v) => updateClip({ duration: v })}
+                />
+              </Section>
+            )}
+
+            {/* Background */}
+            <Section title="Background" icon={<Wand2 className="size-3.5 text-studio-accent" />}>
               {!selectedClip ? (
-                <p className="text-[10px] text-studio-muted">Select a video clip first.</p>
+                <p className="text-[10px] text-studio-muted">Select a clip in the timeline to change its background.</p>
               ) : (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs">Remove background</span>
-                    <Switch checked={!!selectedClip.bgRemove} onCheckedChange={(v) => updateClip({ bgRemove: v })} />
+                  {selectedClip.kind === "video" && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs">Remove person background (AI)</span>
+                      <Switch checked={!!selectedClip.bgRemove} onCheckedChange={(v) => updateClip({ bgRemove: v })} />
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-1 p-1 bg-studio-surface rounded-lg">
+                    {(["color", "image"] as const).map((m) => (
+                      <button key={m} onClick={() => updateClip({ bgMode: m })}
+                        className={cn("py-1.5 text-[10px] rounded capitalize transition-colors",
+                          (selectedClip.bgMode ?? "color") === m ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{m}</button>
+                    ))}
                   </div>
-                  {selectedClip.bgRemove && (
+                  {(selectedClip.bgMode ?? "color") === "color" && (
                     <>
-                      <div className="grid grid-cols-2 gap-1 p-1 bg-studio-surface rounded-lg">
-                        {(["color", "image"] as const).map((m) => (
-                          <button key={m} onClick={() => updateClip({ bgMode: m })}
-                            className={cn("py-1.5 text-[10px] rounded capitalize transition-colors",
-                              selectedClip.bgMode === m ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{m}</button>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={selectedClip.bgColor ?? "#0a0a14"}
+                          onChange={(e) => updateClip({ bgColor: e.target.value })}
+                          className="size-9 rounded cursor-pointer" />
+                        <span className="text-[10px] text-studio-muted font-mono">{selectedClip.bgColor}</span>
+                      </div>
+                      <div className="grid grid-cols-6 gap-1.5">
+                        {["#000000", "#ffffff", "#0a0a14", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#3b82f6", "#ec4899", "#14b8a6", "#84cc16", "#f97316"].map((col) => (
+                          <button key={col} onClick={() => updateClip({ bgColor: col })}
+                            className="aspect-square rounded border border-studio-border hover:scale-110 transition-transform"
+                            style={{ background: col }} aria-label={col} />
                         ))}
                       </div>
-                      {selectedClip.bgMode === "color" && (
-                        <div className="flex items-center gap-2">
-                          <input type="color" value={selectedClip.bgColor ?? "#0a0a14"}
-                            onChange={(e) => updateClip({ bgColor: e.target.value })}
-                            className="size-9 rounded cursor-pointer" />
-                          <span className="text-[10px] text-studio-muted font-mono">{selectedClip.bgColor}</span>
+                    </>
+                  )}
+                  {(selectedClip.bgMode ?? "color") === "image" && (
+                    <>
+                      <Button variant="outline" size="sm" className="w-full h-8 text-xs" onClick={() => bgFileInputRef.current?.click()}>
+                        <Upload className="size-3.5" /> Upload image
+                      </Button>
+                      <input ref={bgFileInputRef} type="file" hidden accept="image/*" onChange={(e) => { handleBgImageUpload(e.target.files); e.target.value = ""; }} />
+                      {media.filter((m: any) => m.kind === "image").length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] text-studio-muted">From media library</p>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {media.filter((m: any) => m.kind === "image").map((m: any) => (
+                              <button key={m.id} onClick={() => updateClip({ bgImageUrl: m.url, bgMode: "image" })}
+                                className={cn(
+                                  "aspect-square rounded overflow-hidden border-2 transition-colors",
+                                  selectedClip.bgImageUrl === m.url ? "border-studio-accent" : "border-transparent hover:border-studio-accent/60"
+                                )}>
+                                <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       )}
-                      {selectedClip.bgMode === "image" && (
-                        <>
-                          <Button variant="outline" size="sm" className="w-full h-8 text-xs" onClick={() => bgFileInputRef.current?.click()}>
-                            <Upload className="size-3.5" /> Upload image
-                          </Button>
-                          <input ref={bgFileInputRef} type="file" hidden accept="image/*" onChange={(e) => handleBgImageUpload(e.target.files)} />
-                          {selectedClip.bgImageUrl && (
-                            <img src={selectedClip.bgImageUrl} alt="bg" className="w-full h-20 object-cover rounded" />
-                          )}
-                        </>
+                      {selectedClip.bgImageUrl && (
+                        <img src={selectedClip.bgImageUrl} alt="bg" className="w-full h-20 object-cover rounded" />
                       )}
                     </>
                   )}
                 </div>
               )}
             </Section>
+
 
             {/* Audio inspector */}
             {selectedAudioId && (() => {
