@@ -1,36 +1,32 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import {
-  ArrowLeft, Upload, Play, Pause, Type, Sparkles, Download, Loader2,
-  Film, Music, Image as ImageIcon, Scissors, Trash2, Wand2, Volume2, VolumeX, Plus, Library
-} from "lucide-react";
+import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/export-dialog";
-import { PreviewCanvas } from "@/components/preview-canvas";
 import { Waveform } from "@/components/waveform";
 import { VfxOverlay } from "@/components/vfx-overlay";
-import { AiAssistant } from "@/components/ai-assistant";
-import { FACE_FILTERS, type FilterCategory } from "@/lib/face-filters";
+import { AiVfxAssistant } from "@/components/ai-vfx-assistant";
+import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ } from "@/lib/vfx-presets";
 import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
-import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ } from "@/lib/vfx-presets";
-import type { AiEditResult } from "@/lib/ai-edit.functions";
+import { processVfxJob, type VfxJob, presetToJob, matchVfxPreset } from "@/lib/ai-vfx-engine";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
   head: () => ({ meta: [{ title: "Editor — CreatorCut" }] }),
 });
 
-const AUDIO_TRACKS = 3; // A1, A2, A3
+const AUDIO_TRACKS = 4; // Increased to 4 audio tracks
 const PX_PER_SEC = 60;
+const PLAYBACK_FPS = 60; // Higher FPS for smooth playback
 
 type Clip = {
   id: string;
@@ -39,7 +35,12 @@ type Clip = {
   kind: "video" | "image";
   start: number;
   duration: number;
+  originalDuration?: number; // For audio time-stretch
+  playbackRate?: number; // 1.0 = normal, 0.5 = half speed, 2.0 = double
   url?: string;
+  // Store VFX processed URL
+  vfxUrl?: string | null;
+  vfxPresetApplied?: string | null;
   // AI effects (per clip)
   bgRemove?: boolean;
   bgMode?: "color" | "image";
@@ -48,6 +49,8 @@ type Clip = {
   faceFilter?: string | null;
   // VFX preset (color grade + overlay)
   vfxPresetId?: string | null;
+  // Storyboard frames
+  storyboardFrames?: { time: number; thumbnail?: string }[];
 };
 
 type AudioClip = {
@@ -56,6 +59,8 @@ type AudioClip = {
   url: string;
   start: number;
   duration: number;
+  originalDuration: number; // Original audio length, before stretching
+  playbackRate: number; // Stretch factor (1.0 = normal)
   track: number; // 0..AUDIO_TRACKS-1
   volume: number; // 0..1
   muted: boolean;
@@ -65,6 +70,8 @@ type AudioClip = {
 
 type TextOverlay = { id: string; text: string; start: number; duration: number; color: string };
 type Adjustments = { brightness: number; contrast: number; saturation: number; blur: number };
+
+type ViewMode = "timeline" | "storyboard";
 
 function EditorPage() {
   const { projectId } = Route.useParams();
@@ -82,11 +89,23 @@ function EditorPage() {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [activePanel, setActivePanel] = useState<"media" | "sounds" | "text" | "effects" | "ai">("media");
-  const [filterCategory, setFilterCategory] = useState<FilterCategory>("face");
+  const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [vfxCategory, setVfxCategory] = useState<VfxCategory>("cinematic");
   const [exportOpen, setExportOpen] = useState(false);
+  const [isProcessingVfx, setIsProcessingVfx] = useState(false);
+
+  // Dragging state for audio edges
+  const [dragState, setDragState] = useState<{
+    type: "audio-start" | "audio-end" | "clip-start" | "clip-end" | null;
+    id: string;
+    startX: number;
+    startTime: number;
+    startDuration: number;
+    startOriginalDuration: number;
+  } | null>(null);
 
   const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null;
+  const selectedAudio = audioClips.find((a) => a.id === selectedAudioId) ?? null;
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -117,6 +136,7 @@ function EditorPage() {
       if (ts?.audioClips) setAudioClips(ts.audioClips);
       if (ts?.overlays) setOverlays(ts.overlays);
       if (ts?.adjustments) setAdj(ts.adjustments);
+      if (ts?.viewMode) setViewMode(ts.viewMode);
     }
   }, [project]);
 
@@ -128,7 +148,7 @@ function EditorPage() {
       );
       const { error } = await supabase.from("projects").update({
         title, duration_seconds: totalDuration,
-        timeline_state: { clips, audioClips, overlays, adjustments: adj } as any,
+        timeline_state: { clips, audioClips, overlays, adjustments: adj, viewMode } as any,
       }).eq("id", projectId);
       if (error) throw error;
     },
@@ -140,7 +160,10 @@ function EditorPage() {
   function sanitizeName(name: string) {
     const dot = name.lastIndexOf(".");
     const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60);
-    const ext = (dot > 0 ? name.slice(dot + 1) : "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase().slice(0, 8);
+    const ext = (dot > 0 ? name.slice(dot + 1) : "")
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .toLowerCase()
+      .slice(0, 8);
     return ext ? `${base}.${ext}` : base || "file";
   }
 
@@ -178,36 +201,110 @@ function EditorPage() {
       probe.preload = "metadata";
       probe.src = m.url;
       probe.onloadedmetadata = () => {
+        const originalDuration = probe.duration || 5;
         const newClip: Clip = {
-          id: crypto.randomUUID(), mediaId: m.id, name: m.name, kind: "video",
-          start, duration: probe.duration || 5, url: m.url,
+          id: crypto.randomUUID(),
+          mediaId: m.id,
+          name: m.name,
+          kind: "video",
+          start,
+          duration: originalDuration,
+          originalDuration,
+          playbackRate: 1.0,
+          url: m.url,
           bgRemove: false, bgMode: "color", bgColor: "#0a0a14", bgImageUrl: null, faceFilter: null,
+          storyboardFrames: [],
         };
         setClips((c) => [...c, newClip]);
         setSelectedClipId(newClip.id);
+        // Generate storyboard frames
+        generateStoryboardFrames(newClip);
       };
     } else if (m.kind === "audio") {
-      addAudioFromUrl(m.url, m.name);
+      addAudioFromUrl(m.url, m.name, 0);
     } else if (m.kind === "image") {
       const start = clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0);
       const newClip: Clip = {
-        id: crypto.randomUUID(), mediaId: m.id, name: m.name, kind: "image",
-        start, duration: 5, url: m.url,
+        id: crypto.randomUUID(),
+        mediaId: m.id,
+        name: m.name,
+        kind: "image",
+        start,
+        duration: 5,
+        url: m.url,
         bgRemove: false, bgMode: "color", bgColor: "#0a0a14", bgImageUrl: null, faceFilter: null,
       };
       setClips((c) => [...c, newClip]);
       setSelectedClipId(newClip.id);
-      toast.success(`Added image "${m.name}" — adjust duration in the inspector`);
+      toast.success(`Added image "${m.name}" — drag the edge to adjust duration`);
     }
+  }
+
+  // Generate storyboard frames for video clips
+  function generateStoryboardFrames(clip: Clip) {
+    if (clip.kind !== "video" || !clip.url) return;
+    const video = document.createElement("video");
+    video.src = clip.url;
+    video.preload = "metadata";
+    video.muted = true;
+
+    video.onloadedmetadata = () => {
+      const frames: { time: number; thumbnail?: string }[] = [];
+      const numFrames = Math.max(12, Math.floor(video.duration / 2)); // Frame every 2 seconds, minimum 12
+      const interval = video.duration / numFrames;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 160;
+      canvas.height = 90;
+      const ctx = canvas.getContext("2d");
+
+      if (!ctx) return;
+
+      let currentFrame = 0;
+      const captureFrame = () => {
+        if (currentFrame >= numFrames) {
+          setClips((all) => all.map((c) => c.id === clip.id ? { ...c, storyboardFrames: frames } : c));
+          return;
+        }
+        const time = currentFrame * interval;
+        video.currentTime = time;
+      };
+
+      video.onseeked = () => {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const thumbnail = canvas.toDataURL("image/jpeg", 0.6);
+        frames.push({ time: currentFrame * interval, thumbnail });
+        currentFrame++;
+        if (currentFrame < numFrames) {
+          setTimeout(captureFrame, 10);
+        } else {
+          setClips((all) => all.map((c) => c.id === clip.id ? { ...c, storyboardFrames: frames } : c));
+        }
+      };
+
+      captureFrame();
+    };
   }
 
   async function addAudioFromUrl(url: string, name: string, track = 0) {
     try {
       const buf = await decodeAudio(url);
-      const start = audioClips.filter((a) => a.track === track).reduce((acc, c) => Math.max(acc, c.start + c.duration), 0);
+      const start = audioClips
+        .filter((a) => a.track === track)
+        .reduce((acc, c) => Math.max(acc, c.start + c.duration), 0);
       const newClip: AudioClip = {
-        id: crypto.randomUUID(), name, url, start, duration: buf.duration,
-        track, volume: 1, muted: false, fadeIn: 0, fadeOut: 0,
+        id: crypto.randomUUID(),
+        name,
+        url,
+        start,
+        duration: buf.duration,
+        originalDuration: buf.duration,
+        playbackRate: 1,
+        track,
+        volume: 1,
+        muted: false,
+        fadeIn: 0,
+        fadeOut: 0,
       };
       setAudioClips((a) => [...a, newClip]);
       setSelectedAudioId(newClip.id);
@@ -217,15 +314,35 @@ function EditorPage() {
     }
   }
 
+  // Split video clip at current playhead
   function splitClip() {
     if (!selectedClipId) return;
     const c = clips.find((x) => x.id === selectedClipId);
     if (!c) return;
     const splitAt = currentTime - c.start;
-    if (splitAt <= 0 || splitAt >= c.duration) { toast.info("Move playhead inside the clip to split"); return; }
-    const a = { ...c, duration: splitAt };
-    const b = { ...c, id: crypto.randomUUID(), start: c.start + splitAt, duration: c.duration - splitAt };
-    setClips((all) => all.flatMap((x) => x.id === c.id ? [a, b] : [x]));
+    if (splitAt <= 0 || splitAt >= c.duration) {
+      toast.info("Move playhead inside the clip to split");
+      return;
+    }
+
+    // Calculate the time offset within the original video
+    const originalSplitTime = c.playbackRate ? splitAt * c.playbackRate : splitAt;
+
+    const a: Clip = {
+      ...c,
+      duration: splitAt,
+    };
+
+    const b: Clip = {
+      ...c,
+      id: crypto.randomUUID(),
+      start: c.start + splitAt,
+      duration: c.duration - splitAt,
+      storyboardFrames: c.storyboardFrames?.filter(f => f.time >= originalSplitTime),
+    };
+
+    setClips((all) => all.flatMap((x) => (x.id === c.id ? [a, b] : [x])));
+    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}`);
   }
 
   function deleteClip() {
@@ -245,11 +362,11 @@ function EditorPage() {
 
   function updateClip(patch: Partial<Clip>) {
     if (!selectedClipId) return;
-    setClips((all) => all.map((c) => c.id === selectedClipId ? { ...c, ...patch } : c));
+    setClips((all) => all.map((c) => (c.id === selectedClipId ? { ...c, ...patch } : c)));
   }
 
   function updateAudio(id: string, patch: Partial<AudioClip>) {
-    setAudioClips((all) => all.map((c) => c.id === id ? { ...c, ...patch } : c));
+    setAudioClips((all) => all.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }
 
   async function handleBgImageUpload(files: FileList | null) {
@@ -257,7 +374,10 @@ function EditorPage() {
     const file = files[0];
     const path = `${user.id}/${projectId}/bg-${Date.now()}-${file.name}`;
     const { error } = await supabase.storage.from("media").upload(path, file, { contentType: file.type });
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     const { data: signed } = await supabase.storage.from("media").createSignedUrl(path, 3600);
     updateClip({ bgImageUrl: signed?.signedUrl ?? null, bgMode: "image" });
     toast.success("Background image set");
@@ -269,174 +389,367 @@ function EditorPage() {
     audioClips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
     10,
   );
-  const activeClip = clips.find((c) => currentTime >= c.start && currentTime < c.start + c.duration) ?? null;
+
+  // Find active clips at current time (can be multiple)
+  const activeClips = clips.filter((c) => currentTime >= c.start && currentTime < c.start + c.duration);
+  const activeClip = activeClips[0] ?? null;
   const activeOverlay = overlays.find((o) => currentTime >= o.start && currentTime < o.start + o.duration);
 
-  // Playback ticker
+  // SMOOTH PLAYBACK ENGINE - 60 FPS updates
+  const playbackRef = useRef<{
+    lastTime: number;
+    animationId: number;
+  }>({ lastTime: 0, animationId: 0 });
+
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
+    const tick = (timestamp: number) => {
       if (playing) {
-        const dt = (now - last) / 1000;
+        const dt = (timestamp - playbackRef.current.lastTime) / 1000;
+        playbackRef.current.lastTime = timestamp;
+
         setCurrentTime((t) => {
           const nt = t + dt;
-          if (nt >= totalDuration) { setPlaying(false); return totalDuration; }
+          if (nt >= totalDuration) {
+            setPlaying(false);
+            return totalDuration;
+          }
           return nt;
         });
       }
-      last = now;
-      raf = requestAnimationFrame(tick);
+      playbackRef.current.animationId = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+
+    playbackRef.current.lastTime = performance.now();
+    playbackRef.current.animationId = requestAnimationFrame(tick);
+
+    return () => cancelAnimationFrame(playbackRef.current.animationId);
   }, [playing, totalDuration]);
 
-  // ---- Audio playback engine ----
-  const audioNodesRef = useRef<Map<string, { src: AudioBufferSourceNode; gain: GainNode }>>(new Map());
+  // MULTI-TRACK AUDIO PLAYBACK ENGINE
+  const audioEngineRef = useRef<{
+    context: AudioContext | null;
+    nodes: Map<string, { source: AudioBufferSourceNode; gain: GainNode; started: boolean }>;
+    masterGain: GainNode | null;
+  }>({
+    context: null,
+    nodes: new Map(),
+    masterGain: null,
+  });
 
+  // Initialize audio context
   useEffect(() => {
-    const ac = getAudioContext();
-    const nodes = audioNodesRef.current;
+    return () => {
+      // Cleanup
+      const engine = audioEngineRef.current;
+      if (engine.context) {
+        engine.nodes.forEach(({ source }) => {
+          try {
+            source.stop();
+          } catch {}
+        });
+        engine.context.close();
+      }
+    };
+  }, []);
 
-    // Stop everything when paused
+  // Main audio playback loop - plays ALL audio tracks simultaneously
+  useEffect(() => {
+    const engine = audioEngineRef.current;
+
     if (!playing) {
-      nodes.forEach(({ src }) => { try { src.stop(); } catch {} });
-      nodes.clear();
+      // Stop all audio
+      engine.nodes.forEach(({ source }) => {
+        try {
+          source.stop();
+        } catch {}
+      });
+      engine.nodes.clear();
       return;
     }
 
-    // Start any audio clip overlapping currentTime
-    (async () => {
-      for (const ac2 of audioClips) {
-        if (ac2.muted) continue;
-        if (currentTime >= ac2.start && currentTime < ac2.start + ac2.duration) {
-          if (nodes.has(ac2.id)) continue;
+    // Initialize context if needed
+    if (!engine.context) {
+      engine.context = getAudioContext();
+      engine.masterGain = engine.context.createGain();
+      engine.masterGain.connect(engine.context.destination);
+    }
+
+    const ctx = engine.context;
+
+    // For each audio clip that should be playing at currentTime
+    audioClips.forEach(async (audioClip) => {
+      if (audioClip.muted) return;
+
+      const clipEnd = audioClip.start + audioClip.duration;
+      const isInRange = currentTime >= audioClip.start && currentTime < clipEnd;
+
+      if (!isInRange) {
+        // Stop if it was playing
+        const node = engine.nodes.get(audioClip.id);
+        if (node) {
           try {
-            const buf = await decodeAudio(ac2.url);
-            const src = ac.createBufferSource();
-            src.buffer = buf;
-            const gain = ac.createGain();
-            const offset = Math.max(0, currentTime - ac2.start);
-            // Apply fade in/out via linearRampToValueAtTime
-            const startGain = offset < ac2.fadeIn ? (offset / Math.max(0.01, ac2.fadeIn)) * ac2.volume : ac2.volume;
-            gain.gain.setValueAtTime(startGain, ac.currentTime);
-            if (ac2.fadeIn > 0 && offset < ac2.fadeIn) {
-              gain.gain.linearRampToValueAtTime(ac2.volume, ac.currentTime + (ac2.fadeIn - offset));
-            }
-            if (ac2.fadeOut > 0) {
-              const fadeStart = ac2.duration - ac2.fadeOut;
-              if (offset < fadeStart) {
-                gain.gain.setValueAtTime(ac2.volume, ac.currentTime + (fadeStart - offset));
-                gain.gain.linearRampToValueAtTime(0, ac.currentTime + (ac2.duration - offset));
-              }
-            }
-            src.connect(gain).connect(ac.destination);
-            src.start(0, offset);
-            nodes.set(ac2.id, { src, gain });
-            src.onended = () => nodes.delete(ac2.id);
+            node.source.stop();
           } catch {}
+          engine.nodes.delete(audioClip.id);
         }
+        return;
       }
-    })();
 
-    return () => {
-      nodes.forEach(({ src }) => { try { src.stop(); } catch {} });
-      nodes.clear();
-    };
-    // Intentionally only react to play/pause changes; seek/edit pauses first.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
+      // Check if already playing this clip
+      if (engine.nodes.has(audioClip.id)) return;
 
-  // Effective adjustments: per-clip VFX preset overrides global sliders.
+      try {
+        const buffer = await decodeAudio(audioClip.url);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+
+        // Apply playback rate (time-stretch)
+        source.playbackRate.value = audioClip.playbackRate || 1;
+
+        const gain = ctx.createGain();
+
+        // Calculate offset within the clip
+        const offsetInClip = Math.max(0, currentTime - audioClip.start);
+
+        // Apply volume and fades
+        gain.gain.value = audioClip.volume;
+
+        // Fade in
+        if (audioClip.fadeIn > 0 && offsetInClip < audioClip.fadeIn) {
+          const fadeProgress = offsetInClip / audioClip.fadeIn;
+          gain.gain.setValueAtTime(fadeProgress * audioClip.volume, ctx.currentTime);
+          gain.gain.linearRampToValueAtTime(audioClip.volume, ctx.currentTime + (audioClip.fadeIn - offsetInClip));
+        }
+
+        // Fade out
+        if (audioClip.fadeOut > 0) {
+          const fadeOutStart = audioClip.duration - audioClip.fadeOut;
+          if (offsetInClip < fadeOutStart) {
+            const timeUntilFadeOut = fadeOutStart - offsetInClip;
+            gain.gain.setValueAtTime(audioClip.volume, ctx.currentTime + timeUntilFadeOut);
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + audioClip.duration - offsetInClip);
+          } else {
+            // Already in fade out region
+            const fadeProgress = 1 - (audioClip.duration - offsetInClip) / audioClip.fadeOut;
+            gain.gain.value = audioClip.volume * (1 - fadeProgress);
+          }
+        }
+
+        source.connect(gain);
+        gain.connect(engine.masterGain!);
+
+        // Start playback at correct offset
+        source.start(0, offsetInClip * audioClip.playbackRate);
+
+        engine.nodes.set(audioClip.id, { source, gain, started: true });
+
+        source.onended = () => {
+          engine.nodes.delete(audioClip.id);
+        };
+      } catch (error) {
+        console.error("Audio playback error:", error);
+      }
+    });
+
+    // Cleanup stopped clips
+    engine.nodes.forEach((node, id) => {
+      const clip = audioClips.find((a) => a.id === id);
+      if (!clip || clip.muted || currentTime < clip.start || currentTime >= clip.start + clip.duration) {
+        try {
+          node.source.stop();
+        } catch {}
+        engine.nodes.delete(id);
+      }
+    });
+  }, [playing, currentTime, audioClips]);
+
+  // Pause when seeking
+  const handleSeek = useCallback((newTime: number) => {
+    setPlaying(false);
+    setCurrentTime(newTime);
+    // Stop all audio
+    audioEngineRef.current.nodes.forEach(({ source }) => {
+      try {
+        source.stop();
+      } catch {}
+    });
+    audioEngineRef.current.nodes.clear();
+  }, []);
+
+  // Effective adjustments
   const activePreset = getPreset(activeClip?.vfxPresetId);
   const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
-  const filterStyle = activePreset ? adjustmentsToCss(effectiveAdj) :
-    `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+  const filterStyle = activePreset
+    ? adjustmentsToCss(effectiveAdj)
+    : `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
 
-  // ---- AI assistant apply ----
-  function applyAiEdit(r: AiEditResult) {
-    if (!selectedClipId) {
-      toast.error("Select a clip first");
+  // AI VFX Handler
+  async function handleApplyVfx(job: VfxJob, presetName: string) {
+    if (!selectedClip || !selectedClip.url) {
+      toast.error("Select a video clip first");
       return;
     }
-    const patch: Partial<Clip> = {};
-    if (r.presetId) patch.vfxPresetId = r.presetId;
-    if (typeof r.bgRemove === "boolean") patch.bgRemove = r.bgRemove;
-    if (r.bgColor) { patch.bgColor = r.bgColor; patch.bgMode = "color"; }
-    if (r.faceFilter) patch.faceFilter = r.faceFilter;
-    updateClip(patch);
 
-    // Optional: also tweak global adjustments if AI didn't pick a preset
-    if (!r.presetId && r.adjustments) {
-      setAdj((a) => ({
-        ...a,
-        brightness: r.adjustments?.brightness ?? a.brightness,
-        contrast: r.adjustments?.contrast ?? a.contrast,
-        saturation: r.adjustments?.saturation ?? a.saturation,
-        blur: r.adjustments?.blur ?? a.blur,
-      }));
-    }
-
-    // Match a library sound by keyword
-    if (r.soundQuery) {
-      const q = r.soundQuery.toLowerCase();
-      const match = SOUND_LIBRARY.find((s) => s.name.toLowerCase().includes(q) || s.category.includes(q));
-      if (match) {
-        const clip = clips.find((c) => c.id === selectedClipId);
-        if (clip) {
-          // Align with the clip on track 0
-          addAudioFromUrl(match.url, match.name, 0).catch(() => {});
-        }
-      }
-    }
-    toast.success("AI applied to clip");
-  }
-
-  // ---- Drop audio media on a video clip ----
-  function handleDropOnClip(e: React.DragEvent, clipId: string) {
-    e.preventDefault();
-    e.stopPropagation();
-    const data = e.dataTransfer.getData("application/x-creatorcut-media");
-    if (!data) return;
+    setIsProcessingVfx(true);
     try {
-      const m = JSON.parse(data);
-      const clip = clips.find((c) => c.id === clipId);
-      if (!clip) return;
-      if (m.kind === "audio" && m.url) {
-        addAudioFromUrl(m.url, m.name, 0).then(() => {
-          // Re-position to the clip's start
-          setAudioClips((all) => {
-            const last = all[all.length - 1];
-            if (!last) return all;
-            return all.map((a) => a.id === last.id ? { ...a, start: clip.start } : a);
-          });
-        }).catch(() => {});
-        toast.success(`Attached "${m.name}" to "${clip.name}"`);
-      } else if ((m.kind === "video" || m.kind === "image") && m.url) {
-        // For library sounds dragged in (library entries)
-        if (m.libraryAudio) {
-          addAudioFromUrl(m.url, m.name, 0);
-        }
-      }
-    } catch {}
+      const result = await processVfxJob({
+        ...job,
+        inputUrl: selectedClip.url,
+        onProgress: (pct, stage) => {
+          // Could show progress in UI
+        },
+      });
+
+      // Update clip with processed version
+      setClips((all) =>
+        all.map((c) =>
+          c.id === selectedClip.id
+            ? {
+                ...c,
+                vfxUrl: result.outputUrl,
+                vfxPresetApplied: presetName,
+                duration: result.duration,
+                playbackRate: 1,
+              }
+            : c
+        )
+      );
+
+      toast.success("VFX applied successfully!");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "VFX processing failed");
+    } finally {
+      setIsProcessingVfx(false);
+    }
   }
+
+  // Drag handlers for audio clip edges
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent, type: "audio-start" | "audio-end" | "clip-start" | "clip-end", id: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      let item: AudioClip | Clip | null = null;
+      if (type.startsWith("audio")) {
+        item = audioClips.find((a) => a.id === id) ?? null;
+      } else {
+        item = clips.find((c) => c.id === id) ?? null;
+      }
+
+      if (!item) return;
+
+      setDragState({
+        type,
+        id,
+        startX: e.clientX,
+        startTime: item.start,
+        startDuration: item.duration,
+        startOriginalDuration: type.startsWith("audio") ? (item as AudioClip).originalDuration : item.duration,
+      });
+    },
+    [audioClips, clips]
+  );
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = e.clientX - dragState.startX;
+      const dt = dx / PX_PER_SEC;
+
+      if (dragState.type === "audio-start") {
+        // Change start time (move clip, adjust duration to maintain end)
+        const newStart = Math.max(0, dragState.startTime + dt);
+        const newDuration = dragState.startDuration - (newStart - dragState.startTime);
+
+        setAudioClips((all) =>
+          all.map((a) =>
+            a.id === dragState.id
+              ? {
+                  ...a,
+                  start: newStart,
+                  duration: newDuration,
+                  playbackRate: a.originalDuration / newDuration,
+                }
+              : a
+          )
+        );
+      } else if (dragState.type === "audio-end") {
+        // Change duration (time-stretch audio)
+        const newDuration = Math.max(0.5, dragState.startDuration + dt);
+        const clip = audioClips.find((a) => a.id === dragState.id);
+        const originalDuration = clip?.originalDuration ?? dragState.startOriginalDuration;
+
+        setAudioClips((all) =>
+          all.map((a) =>
+            a.id === dragState.id
+              ? {
+                  ...a,
+                  duration: newDuration,
+                  playbackRate: originalDuration / newDuration,
+                }
+              : a
+          )
+        );
+      } else if (dragState.type === "clip-start") {
+        // Move video/image clip start
+        const newStart = Math.max(0, dragState.startTime + dt);
+        const newDuration = dragState.startDuration - (newStart - dragState.startTime);
+
+        setClips((all) =>
+          all.map((c) => (c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c))
+        );
+      } else if (dragState.type === "clip-end") {
+        // Change video/image clip duration
+        const newDuration = Math.max(0.5, dragState.startDuration + dt);
+
+        setClips((all) =>
+          all.map((c) => (c.id === dragState.id ? { ...c, duration: newDuration } : c))
+        );
+      }
+    };
+
+    const handleMouseUp = () => {
+      setDragState(null);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [dragState, audioClips, clips]);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-screen overflow-hidden bg-studio-bg">
       {/* Header */}
-      <header className="h-14 border-b border-studio-border flex items-center justify-between px-4 shrink-0">
+      <header className="h-14 border-b border-studio-border flex items-center justify-between px-4 shrink-0 bg-studio-surface/80 backdrop-blur">
         <div className="flex items-center gap-3 min-w-0">
-          <Link to="/dashboard" className="text-studio-muted hover:text-foreground"><ArrowLeft className="size-4" /></Link>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => saveProject.mutate()}
-            className="h-8 border-none bg-transparent hover:bg-studio-surface focus-visible:bg-studio-surface w-64 font-medium" />
-          <span className="text-[10px] px-2 py-0.5 bg-studio-accent/20 text-studio-accent rounded uppercase tracking-wider">Draft</span>
+          <Link to="/dashboard" className="text-studio-muted hover:text-foreground">
+            <ArrowLeft className="size-4" />
+          </Link>
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => saveProject.mutate()}
+            className="h-8 border-none bg-transparent hover:bg-studio-bg focus-visible:bg-studio-bg w-64 font-medium text-sm"
+          />
+          <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded uppercase tracking-wider">
+            Auto-save
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={() => saveProject.mutate()} disabled={saveProject.isPending}>
-            {saveProject.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Save
+            {saveProject.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            Save
           </Button>
-          <Button size="sm" className="bg-studio-accent hover:bg-studio-accent/90 text-white" onClick={() => setExportOpen(true)}>
+          <Button
+            size="sm"
+            className="bg-gradient-to-r from-orange-500 to-pink-600 hover:from-orange-600 hover:to-pink-700 text-white"
+            onClick={() => setExportOpen(true)}
+          >
             <Download className="size-4" /> Export
           </Button>
         </div>
@@ -445,49 +758,63 @@ function EditorPage() {
       {/* Body */}
       <div className="flex flex-1 min-h-0">
         {/* Left panel */}
-        <aside className="w-72 border-r border-studio-border flex flex-col shrink-0">
+        <aside className="w-80 border-r border-studio-border flex flex-col shrink-0 bg-studio-surface/50">
           <div className="p-3 border-b border-studio-border">
-            <div className="grid grid-cols-5 gap-1 p-1 bg-studio-surface rounded-lg">
+            <div className="grid grid-cols-5 gap-1 p-1 bg-studio-bg rounded-lg">
               {(["media", "sounds", "text", "effects", "ai"] as const).map((p) => (
-                <button key={p} onClick={() => setActivePanel(p)}
-                  className={cn("py-1.5 text-[10px] font-medium rounded-md capitalize transition-colors",
-                    activePanel === p ? "bg-zinc-800 text-foreground" : "text-studio-muted",
-                    p === "ai" && activePanel !== p && "text-studio-accent")}>
-                  {p === "ai" ? "AI ✨" : p}
+                <button
+                  key={p}
+                  onClick={() => setActivePanel(p)}
+                  className={cn(
+                    "py-2 text-[10px] font-medium rounded-md capitalize transition-colors",
+                    activePanel === p ? "bg-gradient-to-r from-orange-500/20 to-pink-500/20 text-foreground border border-orange-500/30" : "text-studio-muted hover:text-foreground",
+                    p === "ai" && activePanel !== p && "text-orange-400"
+                  )}
+                >
+                  {p === "ai" ? "AI*" : p}
                 </button>
               ))}
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="flex-1 overflow-y-auto">
             {activePanel === "media" && (
-              <div className="space-y-3">
+              <div className="p-3 space-y-3">
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-studio-accent"); }}
-                  onDragLeave={(e) => e.currentTarget.classList.remove("border-studio-accent")}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.add("border-orange-500");
+                  }}
+                  onDragLeave={(e) => e.currentTarget.classList.remove("border-orange-500")}
                   onDrop={(e) => {
                     e.preventDefault();
-                    e.currentTarget.classList.remove("border-studio-accent");
+                    e.currentTarget.classList.remove("border-orange-500");
                     handleFiles(e.dataTransfer.files);
                   }}
-                  className="w-full cursor-pointer border-2 border-dashed border-studio-border rounded-lg p-4 text-center hover:border-studio-accent/60 transition-colors"
+                  className="w-full cursor-pointer border-2 border-dashed border-studio-border rounded-lg p-6 text-center hover:border-orange-500/60 transition-colors"
                 >
-                  <Upload className="size-5 mx-auto mb-1 text-studio-muted" />
-                  <p className="text-xs font-medium">Drop or click to upload</p>
-                  <p className="text-[10px] text-studio-muted">Video, image or audio</p>
+                  <Upload className="size-8 mx-auto mb-2 text-studio-muted" />
+                  <p className="text-sm font-medium">Drop or click to upload</p>
+                  <p className="text-xs text-studio-muted mt-1">Video, image or audio files</p>
                 </div>
-                <input ref={fileInputRef} type="file" hidden multiple accept="video/*,audio/*,image/*" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  hidden
+                  multiple
+                  accept="video/*,audio/*,image/*"
+                  onChange={(e) => {
+                    handleFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
                 <div className="grid grid-cols-2 gap-2">
                   {media.map((m) => (
-                    <button key={m.id} onClick={() => addClipFromMedia(m)}
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData("application/x-creatorcut-media", JSON.stringify({
-                          kind: m.kind, url: m.url, name: m.name,
-                        }));
-                        e.dataTransfer.effectAllowed = "copy";
-                      }}
-                      className="group aspect-square bg-zinc-900 rounded-lg outline outline-1 -outline-offset-1 outline-white/5 hover:outline-studio-accent transition-all relative overflow-hidden">
+                    <button
+                      key={m.id}
+                      onClick={() => addClipFromMedia(m)}
+                      className="group aspect-square bg-zinc-900 rounded-lg outline outline-1 -outline-offset-1 outline-white/5 hover:outline-orange-500/50 transition-all relative overflow-hidden"
+                    >
                       {m.kind === "video" && m.url ? (
                         <video src={m.url} className="w-full h-full object-cover" muted preload="metadata" />
                       ) : m.kind === "image" && m.url ? (
@@ -497,15 +824,19 @@ function EditorPage() {
                           <Music className="size-6" />
                         </div>
                       )}
-                      <span className={cn(
-                        "absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider",
-                        m.kind === "video" && "bg-studio-accent/80 text-white",
-                        m.kind === "image" && "bg-emerald-500/80 text-white",
-                        m.kind === "audio" && "bg-amber-500/80 text-black",
-                      )}>
+                      <span
+                        className={cn(
+                          "absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider",
+                          m.kind === "video" && "bg-orange-500/80 text-white",
+                          m.kind === "image" && "bg-emerald-500/80 text-white",
+                          m.kind === "audio" && "bg-blue-500/80 text-white"
+                        )}
+                      >
                         {m.kind}
                       </span>
-                      <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-black/70 text-[9px] truncate text-left">{m.name}</div>
+                      <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-black/80 backdrop-blur text-[9px] truncate text-left">
+                        {m.name}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -515,45 +846,61 @@ function EditorPage() {
               </div>
             )}
 
-
-
             {activePanel === "sounds" && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-[11px] text-studio-muted">
+              <div className="p-3 space-y-3">
+                <div className="flex items-center gap-2 text-xs text-studio-muted">
                   <Library className="size-3.5" /> Free sound library
                 </div>
                 <div className="space-y-1.5">
                   {SOUND_LIBRARY.map((s) => (
-                    <div key={s.id} className="group flex items-center gap-2 p-2 bg-studio-surface rounded-lg">
-                      <div className="size-8 grid place-items-center bg-studio-accent/15 text-studio-accent rounded">
+                    <div key={s.id} className="group flex items-center gap-2 p-2 bg-studio-bg rounded-lg border border-studio-border">
+                      <div className="size-8 grid place-items-center bg-blue-500/20 text-blue-400 rounded">
                         <Music className="size-3.5" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-medium truncate">{s.name}</div>
-                        <div className="text-[10px] text-studio-muted capitalize">{s.category} · {formatTime(s.duration)}</div>
+                        <div className="text-[10px] text-studio-muted capitalize">
+                          {s.category} * {formatTime(s.duration)}
+                        </div>
                       </div>
-                      <button onClick={() => addAudioFromUrl(s.url, s.name, 0)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded bg-studio-accent text-white hover:scale-105">
+                      <button
+                        onClick={() => addAudioFromUrl(s.url, s.name, 0)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded bg-blue-500 text-white hover:scale-105"
+                      >
                         <Plus className="size-3.5" />
                       </button>
                     </div>
                   ))}
                 </div>
                 <p className="text-[10px] text-studio-muted text-center pt-2">
-                  Tip: upload your own audio in the Media tab. Drop on a clip to add to any audio track.
+                  Tip: Drag audio clips to any of the 4 audio tracks. Drag edges to time-stretch.
                 </p>
               </div>
             )}
 
             {activePanel === "text" && (
-              <div className="space-y-3">
-                <Button variant="outline" onClick={addText} className="w-full"><Type className="size-4" /> Add text overlay</Button>
+              <div className="p-3 space-y-3">
+                <Button variant="outline" onClick={addText} className="w-full">
+                  <Type className="size-4" /> Add text overlay
+                </Button>
                 {overlays.map((o) => (
-                  <div key={o.id} className="p-2 bg-studio-surface rounded-lg space-y-2">
-                    <Input value={o.text} onChange={(e) => setOverlays((all) => all.map((x) => x.id === o.id ? { ...x, text: e.target.value } : x))} className="h-7 text-xs" />
+                  <div key={o.id} className="p-2 bg-studio-bg rounded-lg space-y-2 border border-studio-border">
+                    <Input
+                      value={o.text}
+                      onChange={(e) => setOverlays((all) => all.map((x) => (x.id === o.id ? { ...x, text: e.target.value } : x)))}
+                      className="h-7 text-xs"
+                    />
                     <div className="flex gap-2 items-center">
-                      <input type="color" value={o.color} onChange={(e) => setOverlays((all) => all.map((x) => x.id === o.id ? { ...x, color: e.target.value } : x))} className="size-7 rounded" />
-                      <button onClick={() => setOverlays((all) => all.filter((x) => x.id !== o.id))} className="ml-auto text-studio-muted hover:text-destructive">
+                      <input
+                        type="color"
+                        value={o.color}
+                        onChange={(e) => setOverlays((all) => all.map((x) => (x.id === o.id ? { ...x, color: e.target.value } : x)))}
+                        className="size-7 rounded cursor-pointer"
+                      />
+                      <button
+                        onClick={() => setOverlays((all) => all.filter((x) => x.id !== o.id))}
+                        className="ml-auto text-studio-muted hover:text-destructive"
+                      >
                         <Trash2 className="size-3.5" />
                       </button>
                     </div>
@@ -563,60 +910,41 @@ function EditorPage() {
             )}
 
             {activePanel === "effects" && (
-              <div className="space-y-4">
+              <div className="p-3 space-y-4">
                 <div className="space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">VFX & Cinematic Presets</p>
-                  {!selectedClip && (
-                    <p className="text-[10px] text-studio-muted">Select a clip to apply a preset.</p>
-                  )}
-                  <div className="grid grid-cols-3 gap-1 p-1 bg-studio-surface rounded-lg">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-studio-muted">Cinematic VFX Presets</p>
+                  {!selectedClip && <p className="text-[10px] text-studio-muted">Select a clip to apply a preset.</p>}
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-studio-bg rounded-lg">
                     {(["cinematic", "scifi", "action", "fantasy", "vfx", "color"] as const).map((c) => (
-                      <button key={c} onClick={() => setVfxCategory(c)}
-                        className={cn("py-1 text-[10px] rounded capitalize transition-colors",
-                          vfxCategory === c ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{c}</button>
+                      <button
+                        key={c}
+                        onClick={() => setVfxCategory(c)}
+                        className={cn(
+                          "py-1 text-[10px] rounded capitalize transition-colors",
+                          vfxCategory === c ? "bg-orange-500/20 text-orange-400" : "text-studio-muted hover:text-foreground"
+                        )}
+                      >
+                        {c}
+                      </button>
                     ))}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     {VFX_PRESETS.filter((p) => p.category === vfxCategory).map((p) => (
-                      <button key={p.id}
+                      <button
+                        key={p.id}
                         disabled={!selectedClip}
                         onClick={() => updateClip({ vfxPresetId: p.id === "color-original" ? null : p.id })}
                         className={cn(
-                          "p-2 bg-studio-surface border rounded-lg flex flex-col items-start gap-1 text-left transition-all",
+                          "p-2 bg-studio-bg border rounded-lg flex flex-col items-start gap-1 text-left transition-all",
                           selectedClip?.vfxPresetId === p.id
-                            ? "border-studio-accent ring-1 ring-studio-accent" : "border-studio-border hover:border-studio-accent/60",
-                          !selectedClip && "opacity-50 cursor-not-allowed",
-                        )}>
+                            ? "border-orange-500 ring-1 ring-orange-500"
+                            : "border-studio-border hover:border-orange-500/60",
+                          !selectedClip && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
                         <span className="text-lg">{p.emoji}</span>
                         <span className="text-[10px] font-medium leading-tight">{p.name}</span>
                         <span className="text-[9px] text-studio-muted leading-tight line-clamp-2">{p.description}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">Face filters</p>
-                  <div className="grid grid-cols-4 gap-1 p-1 bg-studio-surface rounded-lg">
-                    {(["face", "beauty", "lenses", "overlays"] as const).map((c) => (
-                      <button key={c} onClick={() => setFilterCategory(c)}
-                        className={cn("py-1 text-[10px] rounded capitalize transition-colors",
-                          filterCategory === c ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{c}</button>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {FACE_FILTERS.filter((f) => f.category === filterCategory || f.id === "none").map((f) => (
-                      <button key={f.id}
-                        disabled={!selectedClip}
-                        onClick={() => updateClip({ faceFilter: f.id === "none" ? null : f.id })}
-                        className={cn(
-                          "aspect-square bg-studio-surface border rounded-lg text-[10px] flex flex-col items-center justify-center gap-1 transition-all",
-                          selectedClip?.faceFilter === f.id || (f.id === "none" && !selectedClip?.faceFilter)
-                            ? "border-studio-accent ring-1 ring-studio-accent" : "border-studio-border hover:border-studio-accent/60",
-                          !selectedClip && "opacity-50 cursor-not-allowed",
-                        )}>
-                        <span className="text-xl">{f.emoji}</span>
-                        <span className="text-[9px] leading-tight">{f.name}</span>
                       </button>
                     ))}
                   </div>
@@ -625,11 +953,16 @@ function EditorPage() {
             )}
 
             {activePanel === "ai" && (
-              <div className="-m-3 h-[calc(100%+1.5rem)]">
-                <AiAssistant
-                  selectedClipName={selectedClip?.name ?? null}
+              <div className="h-full">
+                <AiVfxAssistant
+                  selectedClip={
+                    selectedClip && selectedClip.url
+                      ? { id: selectedClip.id, url: selectedClip.vfxUrl || selectedClip.url, name: selectedClip.name, start: selectedClip.start, duration: selectedClip.duration }
+                      : null
+                  }
                   disabled={!selectedClip}
-                  onApply={applyAiEdit}
+                  onApplyVfx={handleApplyVfx}
+                  isProcessing={isProcessingVfx}
                 />
               </div>
             )}
@@ -638,45 +971,68 @@ function EditorPage() {
 
         {/* Center preview */}
         <div className="flex-1 bg-black flex flex-col min-w-0">
+          {/* Timeline/Storyboard toggle */}
+          <div className="h-10 border-b border-studio-border flex items-center px-4 gap-2 bg-studio-surface/50">
+            <Button
+              variant={viewMode === "timeline" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("timeline")}
+              className={cn("h-7 text-xs", viewMode === "timeline" && "bg-orange-500/20 text-orange-400")}
+            >
+              <Clock className="size-3" /> Timeline
+            </Button>
+            <Button
+              variant={viewMode === "storyboard" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("storyboard")}
+              className={cn("h-7 text-xs", viewMode === "storyboard" && "bg-orange-500/20 text-orange-400")}
+            >
+              <LayoutGrid className="size-3" /> Storyboard
+            </Button>
+          </div>
+
           <div className="flex-1 flex items-center justify-center p-6">
-            <div className="relative w-full max-w-5xl aspect-video bg-zinc-900 rounded-xl overflow-hidden shadow-2xl">
-              {activeClip && (activeClip.bgMode === "image" && activeClip.bgImageUrl ? (
-                <img src={activeClip.bgImageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
-              ) : activeClip.bgColor && activeClip.kind === "image" ? (
-                <div className="absolute inset-0" style={{ background: activeClip.bgColor }} />
-              ) : null)}
-              {activeClip?.kind === "image" ? (
-                <img
-                  src={activeClip.url}
-                  alt={activeClip.name}
-                  className="relative w-full h-full object-contain"
-                  style={{ filter: filterStyle }}
-                />
-              ) : (
-                <PreviewCanvas
-                  src={activeClip?.url ?? null}
-                  localTime={activeClip ? currentTime - activeClip.start : 0}
-                  playing={playing && !!activeClip}
-                  adjustmentFilter={filterStyle}
-                  bgRemove={!!activeClip?.bgRemove}
-                  bgMode={activeClip?.bgMode ?? "color"}
-                  bgColor={activeClip?.bgColor ?? "#0a0a14"}
-                  bgImageUrl={activeClip?.bgImageUrl ?? null}
-                  faceFilter={activeClip?.faceFilter ?? null}
-                  onEnded={() => setPlaying(false)}
-                />
-              )}
-              {activePreset && activePreset.overlay !== "none" && (
-                <VfxOverlay
-                  kind={activePreset.overlay}
-                  color={activePreset.overlayColor}
-                  intensity={activePreset.intensity}
-                  playing={playing}
-                />
-              )}
+            <div className="relative w-full max-w-5xl aspect-video bg-zinc-900 rounded-xl overflow-hidden shadow-2xl border border-studio-border">
+              {/* Video preview - all active clips play together */}
+              {activeClips.map((clip, idx) => (
+                <div
+                  key={clip.id}
+                  className={cn("absolute inset-0", idx > 0 && "pointer-events-none")}
+                  style={{ zIndex: activeClips.length - idx }}
+                >
+                  <video
+                    src={clip.vfxUrl || clip.url}
+                    muted
+                    playsInline
+                    className="w-full h-full object-contain"
+                    style={{ filter: filterStyle }}
+                    ref={(el) => {
+                      if (el && playing) {
+                        const localTime = currentTime - clip.start;
+                        if (Math.abs(el.currentTime - localTime) > 0.3) {
+                          el.currentTime = localTime;
+                        }
+                        el.playbackRate = clip.playbackRate || 1;
+                        el.play().catch(() => {});
+                      }
+                    }}
+                  />
+                  {activePreset && activePreset.overlay !== "none" && (
+                    <VfxOverlay
+                      kind={activePreset.overlay}
+                      color={activePreset.overlayColor}
+                      intensity={activePreset.intensity}
+                      playing={playing}
+                    />
+                  )}
+                </div>
+              ))}
               {activeOverlay && (
-                <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none">
-                  <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>
+                <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none z-20">
+                  <span
+                    className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg"
+                    style={{ color: activeOverlay.color }}
+                  >
                     {activeOverlay.text}
                   </span>
                 </div>
@@ -685,14 +1041,18 @@ function EditorPage() {
                 <div className="absolute inset-0 grid place-items-center text-center text-studio-muted pointer-events-none">
                   <div>
                     <Film className="size-12 mx-auto opacity-30 mb-2" />
-                    <p className="text-sm">Upload media and click a clip to add it to the timeline</p>
+                    <p className="text-sm">Upload media and click to add to timeline</p>
+                    <p className="text-xs text-studio-muted mt-1">Or switch to Storyboard view for frame-by-frame editing</p>
                   </div>
                 </div>
               )}
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 glass rounded-full px-5 py-2.5 flex items-center gap-5">
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 glass rounded-full px-5 py-2.5 flex items-center gap-4 z-30">
                 <span className="text-[11px] font-mono text-white/70">{formatTime(currentTime)}</span>
-                <button onClick={() => setPlaying((p) => !p)} className="size-9 bg-white rounded-full grid place-items-center text-black hover:scale-105 transition-transform">
-                  {playing ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current ml-0.5" />}
+                <button
+                  onClick={() => setPlaying((p) => !p)}
+                  className="size-10 bg-gradient-to-r from-orange-500 to-pink-600 rounded-full grid place-items-center text-white hover:scale-105 transition-transform shadow-lg"
+                >
+                  {playing ? <Pause className="size-5 fill-current" /> : <Play className="size-5 fill-current ml-0.5" />}
                 </button>
                 <span className="text-[11px] font-mono text-white">{formatTime(totalDuration)}</span>
               </div>
@@ -700,234 +1060,327 @@ function EditorPage() {
           </div>
         </div>
 
-        {/* Right panel — Inspector */}
-        <aside className="w-80 border-l border-studio-border flex flex-col shrink-0">
+        {/* Right panel - Inspector */}
+        <aside className="w-80 border-l border-studio-border flex flex-col shrink-0 bg-studio-surface/50">
           <div className="p-4 border-b border-studio-border">
             <h2 className="text-sm font-semibold">Inspector</h2>
           </div>
-          <div className="flex-1 overflow-y-auto p-5 space-y-6">
-            {/* Color adjustments */}
-            <Section title="Color adjustments">
-              <AdjustSlider label="Brightness" value={adj.brightness} min={0} max={200} onChange={(v) => setAdj({ ...adj, brightness: v })} />
-              <AdjustSlider label="Contrast" value={adj.contrast} min={0} max={200} onChange={(v) => setAdj({ ...adj, contrast: v })} />
-              <AdjustSlider label="Saturation" value={adj.saturation} min={0} max={200} onChange={(v) => setAdj({ ...adj, saturation: v })} />
-              <AdjustSlider label="Blur" value={adj.blur} min={0} max={10} onChange={(v) => setAdj({ ...adj, blur: v })} />
+          <div className="flex-1 overflow-y-auto p-4 space-y-5">
+            <Section title="Global Adjustments">
+              <AdjustSlider
+                label="Brightness"
+                value={adj.brightness}
+                min={0}
+                max={200}
+                onChange={(v) => setAdj({ ...adj, brightness: v })}
+              />
+              <AdjustSlider
+                label="Contrast"
+                value={adj.contrast}
+                min={0}
+                max={200}
+                onChange={(v) => setAdj({ ...adj, contrast: v })}
+              />
+              <AdjustSlider
+                label="Saturation"
+                value={adj.saturation}
+                min={0}
+                max={200}
+                onChange={(v) => setAdj({ ...adj, saturation: v })}
+              />
+              <AdjustSlider
+                label="Blur"
+                value={adj.blur}
+                min={0}
+                max={10}
+                onChange={(v) => setAdj({ ...adj, blur: v })}
+              />
             </Section>
 
-            {/* Clip properties (image clips) */}
-            {selectedClip?.kind === "image" && (
-              <Section title="Image clip" icon={<ImageIcon className="size-3.5 text-studio-accent" />}>
+            {selectedClip && (
+              <Section title={`Clip: ${selectedClip.name}`} icon={<Film className="size-3.5 text-orange-400" />}>
                 <AdjustSlider
                   label="Duration (s)"
                   value={Math.round(selectedClip.duration)}
-                  min={1}
-                  max={60}
+                  min={0.5}
+                  max={600}
                   onChange={(v) => updateClip({ duration: v })}
                 />
+                <AdjustSlider
+                  label="Playback Speed"
+                  value={Math.round((selectedClip.playbackRate || 1) * 100)}
+                  min={10}
+                  max={400}
+                  onChange={(v) => updateClip({ playbackRate: v / 100 })}
+                  suffix="%"
+                />
+                {selectedClip.vfxPresetApplied && (
+                  <div className="p-2 bg-orange-500/10 rounded-lg border border-orange-500/30">
+                    <div className="text-xs font-medium text-orange-400">VFX: {selectedClip.vfxPresetApplied}</div>
+                  </div>
+                )}
               </Section>
             )}
 
-            {/* Background */}
-            <Section title="Background" icon={<Wand2 className="size-3.5 text-studio-accent" />}>
-              {!selectedClip ? (
-                <p className="text-[10px] text-studio-muted">Select a clip in the timeline to change its background.</p>
-              ) : (
-                <div className="space-y-3">
-                  {selectedClip.kind === "video" && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs">Remove person background (AI)</span>
-                      <Switch checked={!!selectedClip.bgRemove} onCheckedChange={(v) => updateClip({ bgRemove: v })} />
-                    </div>
-                  )}
-                  <div className="grid grid-cols-2 gap-1 p-1 bg-studio-surface rounded-lg">
-                    {(["color", "image"] as const).map((m) => (
-                      <button key={m} onClick={() => updateClip({ bgMode: m })}
-                        className={cn("py-1.5 text-[10px] rounded capitalize transition-colors",
-                          (selectedClip.bgMode ?? "color") === m ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{m}</button>
-                    ))}
-                  </div>
-                  {(selectedClip.bgMode ?? "color") === "color" && (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <input type="color" value={selectedClip.bgColor ?? "#0a0a14"}
-                          onChange={(e) => updateClip({ bgColor: e.target.value })}
-                          className="size-9 rounded cursor-pointer" />
-                        <span className="text-[10px] text-studio-muted font-mono">{selectedClip.bgColor}</span>
-                      </div>
-                      <div className="grid grid-cols-6 gap-1.5">
-                        {["#000000", "#ffffff", "#0a0a14", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#3b82f6", "#ec4899", "#14b8a6", "#84cc16", "#f97316"].map((col) => (
-                          <button key={col} onClick={() => updateClip({ bgColor: col })}
-                            className="aspect-square rounded border border-studio-border hover:scale-110 transition-transform"
-                            style={{ background: col }} aria-label={col} />
-                        ))}
-                      </div>
-                    </>
-                  )}
-                  {(selectedClip.bgMode ?? "color") === "image" && (
-                    <>
-                      <Button variant="outline" size="sm" className="w-full h-8 text-xs" onClick={() => bgFileInputRef.current?.click()}>
-                        <Upload className="size-3.5" /> Upload image
-                      </Button>
-                      <input ref={bgFileInputRef} type="file" hidden accept="image/*" onChange={(e) => { handleBgImageUpload(e.target.files); e.target.value = ""; }} />
-                      {media.filter((m: any) => m.kind === "image").length > 0 && (
-                        <div className="space-y-1.5">
-                          <p className="text-[10px] text-studio-muted">From media library</p>
-                          <div className="grid grid-cols-3 gap-1.5">
-                            {media.filter((m: any) => m.kind === "image").map((m: any) => (
-                              <button key={m.id} onClick={() => updateClip({ bgImageUrl: m.url, bgMode: "image" })}
-                                className={cn(
-                                  "aspect-square rounded overflow-hidden border-2 transition-colors",
-                                  selectedClip.bgImageUrl === m.url ? "border-studio-accent" : "border-transparent hover:border-studio-accent/60"
-                                )}>
-                                <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {selectedClip.bgImageUrl && (
-                        <img src={selectedClip.bgImageUrl} alt="bg" className="w-full h-20 object-cover rounded" />
-                      )}
-                    </>
-                  )}
+            {selectedAudio && (
+              <Section title={`Audio: ${selectedAudio.name}`} icon={<Music className="size-3.5 text-blue-400" />}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs">Mute</span>
+                  <Switch checked={selectedAudio.muted} onCheckedChange={(v) => updateAudio(selectedAudio.id, { muted: v })} />
                 </div>
-              )}
-            </Section>
-
-
-            {/* Audio inspector */}
-            {selectedAudioId && (() => {
-              const ac = audioClips.find((a) => a.id === selectedAudioId);
-              if (!ac) return null;
-              return (
-                <Section title={`Audio: ${ac.name}`} icon={<Music className="size-3.5 text-studio-accent" />}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs">Mute</span>
-                    <Switch checked={ac.muted} onCheckedChange={(v) => updateAudio(ac.id, { muted: v })} />
+                <AdjustSlider
+                  label="Volume"
+                  value={Math.round(selectedAudio.volume * 100)}
+                  min={0}
+                  max={100}
+                  onChange={(v) => updateAudio(selectedAudio.id, { volume: v / 100 })}
+                />
+                <AdjustSlider
+                  label="Fade in (s)"
+                  value={selectedAudio.fadeIn}
+                  min={0}
+                  max={Math.floor(selectedAudio.duration)}
+                  onChange={(v) => updateAudio(selectedAudio.id, { fadeIn: v })}
+                />
+                <AdjustSlider
+                  label="Fade out (s)"
+                  value={selectedAudio.fadeOut}
+                  min={0}
+                  max={Math.floor(selectedAudio.duration)}
+                  onChange={(v) => updateAudio(selectedAudio.id, { fadeOut: v })}
+                />
+                <div className="p-2 bg-blue-500/10 rounded-lg border border-blue-500/30">
+                  <div className="text-xs text-studio-muted mb-1">Time Stretch</div>
+                  <div className="text-sm font-medium text-blue-400">
+                    {((selectedAudio.originalDuration / selectedAudio.duration) * 100).toFixed(0)}%
                   </div>
-                  <AdjustSlider label="Volume" value={Math.round(ac.volume * 100)} min={0} max={100}
-                    onChange={(v) => updateAudio(ac.id, { volume: v / 100 })} />
-                  <AdjustSlider label="Fade in (s)" value={ac.fadeIn} min={0} max={Math.floor(ac.duration)}
-                    onChange={(v) => updateAudio(ac.id, { fadeIn: v })} />
-                  <AdjustSlider label="Fade out (s)" value={ac.fadeOut} min={0} max={Math.floor(ac.duration)}
-                    onChange={(v) => updateAudio(ac.id, { fadeOut: v })} />
-                </Section>
-              );
-            })()}
+                </div>
+              </Section>
+            )}
 
-            <div className="p-3 bg-studio-accent/5 rounded-xl border border-studio-accent/20">
+            <div className="p-3 bg-gradient-to-r from-orange-500/10 to-pink-500/10 rounded-xl border border-orange-500/20">
               <div className="flex items-center gap-2 mb-1.5">
-                <Sparkles className="size-3.5 text-studio-accent" />
-                <span className="text-xs font-semibold">Heads up</span>
+                <Wand2 className="size-3.5 text-orange-400" />
+                <span className="text-xs font-semibold">Pro Tip</span>
               </div>
               <p className="text-[10px] text-studio-muted leading-relaxed">
-                AI effects (bg removal, face filters) and audio tracks render in the preview. Export currently encodes the V1 track with color/text overlays.
+                Drag audio clip edges to time-stretch. Use the AI tab for real VFX processing. Split clips at the playhead for precise edits.
               </p>
             </div>
           </div>
         </aside>
       </div>
 
-      {/* Timeline */}
-      <section className="h-72 border-t border-studio-border bg-studio-surface flex flex-col shrink-0">
-        <div className="h-10 border-b border-studio-border flex items-center px-4 justify-between">
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId}><Scissors className="size-3.5" /> Split</Button>
-            <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId}><Trash2 className="size-3.5" /> Delete</Button>
-          </div>
+      {/* Timeline / Storyboard */}
+      <section className="h-80 border-t border-studio-border bg-studio-surface flex flex-col shrink-0">
+        <div className="h-11 border-b border-studio-border flex items-center px-4 justify-between bg-studio-bg/50">
+          {viewMode === "timeline" ? (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId}>
+                <Split className="size-3.5" /> Split at Playhead
+              </Button>
+              <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId}>
+                <Trash2 className="size-3.5" /> Delete
+              </Button>
+            </div>
+          ) : (
+            <div className="text-xs text-studio-muted">Click a frame to jump to that time</div>
+          )}
           <div className="text-[11px] font-mono text-studio-muted">
             {formatTime(currentTime)} / {formatTime(totalDuration)}
           </div>
         </div>
-        <div
-          className="flex-1 overflow-x-auto bg-studio-bg/50 p-3 space-y-1.5 relative"
-          onClick={(e) => {
-            const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-            const x = e.clientX - rect.left + (e.currentTarget as HTMLDivElement).scrollLeft - 80;
-            const t = Math.max(0, Math.min(totalDuration, x / PX_PER_SEC));
-            setCurrentTime(t);
-          }}
-        >
-          {/* Video track */}
-          <TimelineRow label="V1">
-            {clips.map((c) => (
-              <div
-                key={c.id}
-                onClick={(e) => { e.stopPropagation(); setSelectedClipId(c.id); setSelectedAudioId(null); setCurrentTime(c.start); }}
-                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
-                onDrop={(e) => handleDropOnClip(e, c.id)}
-                className={cn(
-                  "h-full absolute rounded flex items-center px-3 gap-2 cursor-pointer transition-colors overflow-hidden",
-                  selectedClipId === c.id
-                    ? "bg-studio-accent/40 border-2 border-studio-accent"
-                    : "bg-studio-accent/15 border border-studio-accent/40 hover:bg-studio-accent/25"
-                )}
-                style={{ width: `${c.duration * PX_PER_SEC}px`, left: `${c.start * PX_PER_SEC}px` }}
-              >
-                <div className="size-6 bg-black/40 rounded-sm shrink-0 grid place-items-center text-[9px]">
-                  {c.bgRemove ? "🪄" : c.faceFilter ? "✨" : "▶"}
-                </div>
-                <span className="text-[10px] font-medium truncate">{c.name}</span>
-              </div>
-            ))}
-            {clips.length === 0 && <div className="text-xs text-studio-muted px-3 self-center">Add clips from the media panel</div>}
-          </TimelineRow>
 
-          {/* Text track */}
-          <TimelineRow label="T1" height="h-7">
-            {overlays.map((o) => (
-              <div key={o.id} className="h-full absolute bg-amber-500/20 border border-amber-500/40 rounded flex items-center px-2"
-                style={{ width: `${o.duration * PX_PER_SEC}px`, left: `${o.start * PX_PER_SEC}px` }}>
-                <span className="text-[9px] font-medium truncate">{o.text}</span>
-              </div>
-            ))}
-          </TimelineRow>
-
-          {/* Audio tracks */}
-          {Array.from({ length: AUDIO_TRACKS }).map((_, ti) => (
-            <TimelineRow key={`a${ti}`} label={`A${ti + 1}`} height="h-12">
-              {audioClips.filter((a) => a.track === ti).map((a) => (
+        {viewMode === "timeline" ? (
+          <div
+            className="flex-1 overflow-x-auto overflow-y-hidden bg-studio-bg/30 p-3 relative"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left + e.currentTarget.scrollLeft - 80;
+                const t = Math.max(0, Math.min(totalDuration, x / PX_PER_SEC));
+                handleSeek(t);
+              }
+            }}
+          >
+            {/* Video track */}
+            <TimelineRow label="V1" height="h-16">
+              {clips.map((c) => (
                 <div
-                  key={a.id}
-                  onClick={(e) => { e.stopPropagation(); setSelectedAudioId(a.id); setSelectedClipId(null); }}
+                  key={c.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedClipId(c.id);
+                    setSelectedAudioId(null);
+                    handleSeek(c.start);
+                  }}
                   className={cn(
-                    "h-full absolute rounded flex items-center gap-2 cursor-pointer transition-colors overflow-hidden",
-                    selectedAudioId === a.id
-                      ? "bg-emerald-500/30 border-2 border-emerald-400"
-                      : "bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25"
+                    "h-full absolute rounded flex items-center px-3 gap-2 cursor-pointer transition-colors overflow-hidden group",
+                    selectedClipId === c.id
+                      ? "bg-gradient-to-r from-orange-500/30 to-pink-500/30 border-2 border-orange-500"
+                      : "bg-gradient-to-r from-orange-500/15 to-pink-500/15 border border-orange-500/40 hover:border-orange-500"
                   )}
-                  style={{ width: `${a.duration * PX_PER_SEC}px`, left: `${a.start * PX_PER_SEC}px` }}
+                  style={{
+                    width: `${c.duration * PX_PER_SEC}px`,
+                    left: `${c.start * PX_PER_SEC}px`,
+                  }}
                 >
-                  <button onClick={(e) => { e.stopPropagation(); updateAudio(a.id, { muted: !a.muted }); }}
-                    className="size-6 shrink-0 grid place-items-center text-emerald-300 ml-1.5">
-                    {a.muted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
-                  </button>
-                  <div className="flex-1 min-w-0 h-full relative">
-                    <Waveform url={a.url} width={Math.max(20, a.duration * PX_PER_SEC - 32)} height={40} color="#10b981" />
-                    <span className="absolute top-0.5 left-1 text-[9px] font-medium truncate text-emerald-100/90 pointer-events-none">
-                      {a.name}
-                    </span>
+                  {/* Left drag handle */}
+                  <div
+                    className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-orange-500/30"
+                    onMouseDown={(e) => handleMouseDown(e, "clip-start", c.id)}
+                  />
+                  {/* Right drag handle */}
+                  <div
+                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-orange-500/30"
+                    onMouseDown={(e) => handleMouseDown(e, "clip-end", c.id)}
+                  />
+                  <div className="size-6 bg-black/40 rounded-sm shrink-0 grid place-items-center text-[9px]">
+                    {c.vfxPresetApplied ? "VFX" : "VID"}
                   </div>
+                  <span className="text-[10px] font-medium truncate">{c.name}</span>
+                </div>
+              ))}
+              {clips.length === 0 && (
+                <div className="text-xs text-studio-muted px-3 self-center">Add clips from the media panel</div>
+              )}
+            </TimelineRow>
+
+            {/* Text track */}
+            <TimelineRow label="T1" height="h-8">
+              {overlays.map((o) => (
+                <div
+                  key={o.id}
+                  className="h-full absolute bg-amber-500/20 border border-amber-500/40 rounded flex items-center px-2"
+                  style={{ width: `${o.duration * PX_PER_SEC}px`, left: `${o.start * PX_PER_SEC}px` }}
+                >
+                  <span className="text-[9px] font-medium truncate">{o.text}</span>
                 </div>
               ))}
             </TimelineRow>
-          ))}
 
-          {/* Playhead */}
-          <div className="absolute top-0 bottom-0 w-px bg-studio-accent z-10 shadow-[0_0_8px_rgba(139,92,246,0.8)] pointer-events-none"
-            style={{ left: `${80 + currentTime * PX_PER_SEC}px` }}>
-            <div className="absolute -top-1 -left-[3px] w-2 h-2 bg-studio-accent rotate-45" />
+            {/* Audio tracks */}
+            {Array.from({ length: AUDIO_TRACKS }).map((_, ti) => (
+              <TimelineRow key={`a${ti}`} label={`A${ti + 1}`} height="h-10">
+                {audioClips
+                  .filter((a) => a.track === ti)
+                  .map((a) => (
+                    <div
+                      key={a.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedAudioId(a.id);
+                        setSelectedClipId(null);
+                      }}
+                      className={cn(
+                        "h-full absolute rounded flex items-center gap-1 cursor-pointer transition-colors overflow-hidden group",
+                        selectedAudioId === a.id
+                          ? "bg-blue-500/30 border-2 border-blue-400"
+                          : "bg-blue-500/15 border border-blue-500/40 hover:border-blue-500"
+                      )}
+                      style={{
+                        width: `${a.duration * PX_PER_SEC}px`,
+                        left: `${a.start * PX_PER_SEC}px`,
+                      }}
+                    >
+                      {/* Left drag handle (start time) */}
+                      <div
+                        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-500/30 z-10"
+                        onMouseDown={(e) => handleMouseDown(e, "audio-start", a.id)}
+                      />
+                      {/* Right drag handle (duration/time-stretch) */}
+                      <div
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-500/30 z-10"
+                        onMouseDown={(e) => handleMouseDown(e, "audio-end", a.id)}
+                      />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          updateAudio(a.id, { muted: !a.muted });
+                        }}
+                        className="size-6 shrink-0 grid place-items-center text-blue-300 ml-1"
+                      >
+                        {a.muted ? <VolumeX className="size-3" /> : <Volume2 className="size-3" />}
+                      </button>
+                      <div className="flex-1 min-w-0 h-full relative">
+                        <Waveform url={a.url} width={Math.max(20, a.duration * PX_PER_SEC - 40)} height={32} color="#3b82f6" />
+                        <span className="absolute top-0.5 left-1 text-[9px] font-medium truncate text-blue-100/90 pointer-events-none">
+                          {a.name}
+                        </span>
+                        {a.playbackRate !== 1 && (
+                          <span className="absolute bottom-0.5 right-1 text-[8px] text-blue-300/70">
+                            {((1 / a.playbackRate) * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </TimelineRow>
+            ))}
+
+            {/* Playhead */}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-orange-500 z-20 pointer-events-none"
+              style={{ left: `${80 + currentTime * PX_PER_SEC}px` }}
+            >
+              <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-orange-500 rounded-full shadow-lg shadow-orange-500/50" />
+            </div>
           </div>
-        </div>
+        ) : (
+          /* Storyboard View */
+          <div className="flex-1 overflow-y-auto p-4">
+            {selectedClip?.storyboardFrames && selectedClip.storyboardFrames.length > 0 ? (
+              <div className="grid grid-cols-6 gap-2">
+                {selectedClip.storyboardFrames.map((frame, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSeek(selectedClip.start + frame.time)}
+                    className={cn(
+                      "aspect-video bg-studio-surface rounded-lg overflow-hidden border-2 transition-all hover:scale-105",
+                      Math.abs(currentTime - (selectedClip.start + frame.time)) < 0.5
+                        ? "border-orange-500 ring-2 ring-orange-500/50"
+                        : "border-studio-border"
+                    )}
+                  >
+                    {frame.thumbnail ? (
+                      <img src={frame.thumbnail} alt={`Frame at ${formatTime(frame.time)}`} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full grid place-items-center text-studio-muted">
+                        <Film className="size-6" />
+                      </div>
+                    )}
+                    <div className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center py-0.5">
+                      {formatTime(frame.time)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-studio-muted">
+                <div className="text-center">
+                  <Film className="size-12 mx-auto opacity-30 mb-2" />
+                  <p className="text-sm">Select a video clip to see storyboard</p>
+                  <p className="text-xs mt-1">Frames are auto-generated from the video</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
         projectTitle={title}
-        clips={clips.filter((c) => !!c.url).map((c) => ({
-          id: c.id, url: c.url!, name: c.name, start: c.start, duration: c.duration,
-        }))}
+        clips={clips
+          .filter((c) => !!c.url)
+          .map((c) => ({
+            id: c.id,
+            url: c.vfxUrl || c.url!,
+            name: c.name,
+            start: c.start,
+            duration: c.duration,
+          }))}
         overlays={overlays}
         adjustments={adj}
       />
@@ -950,7 +1403,7 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
 function TimelineRow({ label, children, height = "h-12" }: { label: string; children: React.ReactNode; height?: string }) {
   return (
     <div className={cn("flex items-stretch gap-0", height)}>
-      <div className="w-20 h-full flex items-center justify-center border-r border-studio-border bg-studio-surface shrink-0 text-[10px] text-studio-muted">
+      <div className="w-20 h-full flex items-center justify-center border-r border-studio-border bg-studio-surface shrink-0 text-[10px] text-studio-muted font-medium">
         {label}
       </div>
       <div className="flex-1 relative">{children}</div>
@@ -958,12 +1411,29 @@ function TimelineRow({ label, children, height = "h-12" }: { label: string; chil
   );
 }
 
-function AdjustSlider({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
+function AdjustSlider({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+  suffix = "",
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+  suffix?: string;
+}) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       <div className="flex justify-between text-xs">
         <span className="text-studio-muted">{label}</span>
-        <span>{value}</span>
+        <span className="font-medium">
+          {value}
+          {suffix}
+        </span>
       </div>
       <Slider value={[value]} min={min} max={max} step={1} onValueChange={(v) => onChange(v[0])} />
     </div>
@@ -974,5 +1444,6 @@ function formatTime(sec: number) {
   if (!isFinite(sec)) sec = 0;
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  const f = Math.floor((sec % 1) * 100);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
 }
