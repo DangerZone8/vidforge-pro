@@ -447,12 +447,13 @@ function EditorPage() {
         {/* Left panel */}
         <aside className="w-72 border-r border-studio-border flex flex-col shrink-0">
           <div className="p-3 border-b border-studio-border">
-            <div className="grid grid-cols-4 gap-1 p-1 bg-studio-surface rounded-lg">
-              {(["media", "sounds", "text", "effects"] as const).map((p) => (
+            <div className="grid grid-cols-5 gap-1 p-1 bg-studio-surface rounded-lg">
+              {(["media", "sounds", "text", "effects", "ai"] as const).map((p) => (
                 <button key={p} onClick={() => setActivePanel(p)}
-                  className={cn("py-1.5 text-[11px] font-medium rounded-md capitalize transition-colors",
-                    activePanel === p ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>
-                  {p}
+                  className={cn("py-1.5 text-[10px] font-medium rounded-md capitalize transition-colors",
+                    activePanel === p ? "bg-zinc-800 text-foreground" : "text-studio-muted",
+                    p === "ai" && activePanel !== p && "text-studio-accent")}>
+                  {p === "ai" ? "AI ✨" : p}
                 </button>
               ))}
             </div>
