@@ -16,9 +16,13 @@ import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/export-dialog";
 import { PreviewCanvas } from "@/components/preview-canvas";
 import { Waveform } from "@/components/waveform";
+import { VfxOverlay } from "@/components/vfx-overlay";
+import { AiAssistant } from "@/components/ai-assistant";
 import { FACE_FILTERS, type FilterCategory } from "@/lib/face-filters";
 import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
+import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ } from "@/lib/vfx-presets";
+import type { AiEditResult } from "@/lib/ai-edit.functions";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
@@ -42,6 +46,8 @@ type Clip = {
   bgColor?: string;
   bgImageUrl?: string | null;
   faceFilter?: string | null;
+  // VFX preset (color grade + overlay)
+  vfxPresetId?: string | null;
 };
 
 type AudioClip = {
@@ -75,8 +81,9 @@ function EditorPage() {
   const [adj, setAdj] = useState<Adjustments>({ brightness: 100, contrast: 100, saturation: 100, blur: 0 });
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [activePanel, setActivePanel] = useState<"media" | "sounds" | "text" | "effects">("media");
+  const [activePanel, setActivePanel] = useState<"media" | "sounds" | "text" | "effects" | "ai">("media");
   const [filterCategory, setFilterCategory] = useState<FilterCategory>("face");
+  const [vfxCategory, setVfxCategory] = useState<VfxCategory>("cinematic");
   const [exportOpen, setExportOpen] = useState(false);
 
   const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null;
@@ -341,7 +348,79 @@ function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
 
-  const filterStyle = `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+  // Effective adjustments: per-clip VFX preset overrides global sliders.
+  const activePreset = getPreset(activeClip?.vfxPresetId);
+  const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
+  const filterStyle = activePreset ? adjustmentsToCss(effectiveAdj) :
+    `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+
+  // ---- AI assistant apply ----
+  function applyAiEdit(r: AiEditResult) {
+    if (!selectedClipId) {
+      toast.error("Select a clip first");
+      return;
+    }
+    const patch: Partial<Clip> = {};
+    if (r.presetId) patch.vfxPresetId = r.presetId;
+    if (typeof r.bgRemove === "boolean") patch.bgRemove = r.bgRemove;
+    if (r.bgColor) { patch.bgColor = r.bgColor; patch.bgMode = "color"; }
+    if (r.faceFilter) patch.faceFilter = r.faceFilter;
+    updateClip(patch);
+
+    // Optional: also tweak global adjustments if AI didn't pick a preset
+    if (!r.presetId && r.adjustments) {
+      setAdj((a) => ({
+        ...a,
+        brightness: r.adjustments?.brightness ?? a.brightness,
+        contrast: r.adjustments?.contrast ?? a.contrast,
+        saturation: r.adjustments?.saturation ?? a.saturation,
+        blur: r.adjustments?.blur ?? a.blur,
+      }));
+    }
+
+    // Match a library sound by keyword
+    if (r.soundQuery) {
+      const q = r.soundQuery.toLowerCase();
+      const match = SOUND_LIBRARY.find((s) => s.name.toLowerCase().includes(q) || s.category.includes(q));
+      if (match) {
+        const clip = clips.find((c) => c.id === selectedClipId);
+        if (clip) {
+          // Align with the clip on track 0
+          addAudioFromUrl(match.url, match.name, 0).catch(() => {});
+        }
+      }
+    }
+    toast.success("AI applied to clip");
+  }
+
+  // ---- Drop audio media on a video clip ----
+  function handleDropOnClip(e: React.DragEvent, clipId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const data = e.dataTransfer.getData("application/x-creatorcut-media");
+    if (!data) return;
+    try {
+      const m = JSON.parse(data);
+      const clip = clips.find((c) => c.id === clipId);
+      if (!clip) return;
+      if (m.kind === "audio" && m.url) {
+        addAudioFromUrl(m.url, m.name, 0).then(() => {
+          // Re-position to the clip's start
+          setAudioClips((all) => {
+            const last = all[all.length - 1];
+            if (!last) return all;
+            return all.map((a) => a.id === last.id ? { ...a, start: clip.start } : a);
+          });
+        }).catch(() => {});
+        toast.success(`Attached "${m.name}" to "${clip.name}"`);
+      } else if ((m.kind === "video" || m.kind === "image") && m.url) {
+        // For library sounds dragged in (library entries)
+        if (m.libraryAudio) {
+          addAudioFromUrl(m.url, m.name, 0);
+        }
+      }
+    } catch {}
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -368,12 +447,13 @@ function EditorPage() {
         {/* Left panel */}
         <aside className="w-72 border-r border-studio-border flex flex-col shrink-0">
           <div className="p-3 border-b border-studio-border">
-            <div className="grid grid-cols-4 gap-1 p-1 bg-studio-surface rounded-lg">
-              {(["media", "sounds", "text", "effects"] as const).map((p) => (
+            <div className="grid grid-cols-5 gap-1 p-1 bg-studio-surface rounded-lg">
+              {(["media", "sounds", "text", "effects", "ai"] as const).map((p) => (
                 <button key={p} onClick={() => setActivePanel(p)}
-                  className={cn("py-1.5 text-[11px] font-medium rounded-md capitalize transition-colors",
-                    activePanel === p ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>
-                  {p}
+                  className={cn("py-1.5 text-[10px] font-medium rounded-md capitalize transition-colors",
+                    activePanel === p ? "bg-zinc-800 text-foreground" : "text-studio-muted",
+                    p === "ai" && activePanel !== p && "text-studio-accent")}>
+                  {p === "ai" ? "AI ✨" : p}
                 </button>
               ))}
             </div>
@@ -400,6 +480,13 @@ function EditorPage() {
                 <div className="grid grid-cols-2 gap-2">
                   {media.map((m) => (
                     <button key={m.id} onClick={() => addClipFromMedia(m)}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("application/x-creatorcut-media", JSON.stringify({
+                          kind: m.kind, url: m.url, name: m.name,
+                        }));
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
                       className="group aspect-square bg-zinc-900 rounded-lg outline outline-1 -outline-offset-1 outline-white/5 hover:outline-studio-accent transition-all relative overflow-hidden">
                       {m.kind === "video" && m.url ? (
                         <video src={m.url} className="w-full h-full object-cover" muted preload="metadata" />
@@ -478,18 +565,31 @@ function EditorPage() {
             {activePanel === "effects" && (
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">Color presets</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { name: "Original", adj: { brightness: 100, contrast: 100, saturation: 100, blur: 0 } },
-                      { name: "Vivid", adj: { brightness: 105, contrast: 115, saturation: 140, blur: 0 } },
-                      { name: "Mono", adj: { brightness: 100, contrast: 110, saturation: 0, blur: 0 } },
-                      { name: "Retro", adj: { brightness: 95, contrast: 90, saturation: 80, blur: 0 } },
-                      { name: "Dream", adj: { brightness: 110, contrast: 95, saturation: 110, blur: 1 } },
-                      { name: "Noir", adj: { brightness: 90, contrast: 140, saturation: 0, blur: 0 } },
-                    ].map((p) => (
-                      <button key={p.name} onClick={() => setAdj(p.adj)} className="aspect-square bg-studio-surface border border-studio-border rounded-lg hover:border-studio-accent transition-colors text-[10px] grid place-items-center">
-                        {p.name}
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">VFX & Cinematic Presets</p>
+                  {!selectedClip && (
+                    <p className="text-[10px] text-studio-muted">Select a clip to apply a preset.</p>
+                  )}
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-studio-surface rounded-lg">
+                    {(["cinematic", "scifi", "action", "fantasy", "vfx", "color"] as const).map((c) => (
+                      <button key={c} onClick={() => setVfxCategory(c)}
+                        className={cn("py-1 text-[10px] rounded capitalize transition-colors",
+                          vfxCategory === c ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{c}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {VFX_PRESETS.filter((p) => p.category === vfxCategory).map((p) => (
+                      <button key={p.id}
+                        disabled={!selectedClip}
+                        onClick={() => updateClip({ vfxPresetId: p.id === "color-original" ? null : p.id })}
+                        className={cn(
+                          "p-2 bg-studio-surface border rounded-lg flex flex-col items-start gap-1 text-left transition-all",
+                          selectedClip?.vfxPresetId === p.id
+                            ? "border-studio-accent ring-1 ring-studio-accent" : "border-studio-border hover:border-studio-accent/60",
+                          !selectedClip && "opacity-50 cursor-not-allowed",
+                        )}>
+                        <span className="text-lg">{p.emoji}</span>
+                        <span className="text-[10px] font-medium leading-tight">{p.name}</span>
+                        <span className="text-[9px] text-studio-muted leading-tight line-clamp-2">{p.description}</span>
                       </button>
                     ))}
                   </div>
@@ -497,9 +597,6 @@ function EditorPage() {
 
                 <div className="space-y-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">Face filters</p>
-                  {!selectedClip && (
-                    <p className="text-[10px] text-studio-muted">Select a clip in the timeline to apply.</p>
-                  )}
                   <div className="grid grid-cols-4 gap-1 p-1 bg-studio-surface rounded-lg">
                     {(["face", "beauty", "lenses", "overlays"] as const).map((c) => (
                       <button key={c} onClick={() => setFilterCategory(c)}
@@ -524,6 +621,16 @@ function EditorPage() {
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {activePanel === "ai" && (
+              <div className="-m-3 h-[calc(100%+1.5rem)]">
+                <AiAssistant
+                  selectedClipName={selectedClip?.name ?? null}
+                  disabled={!selectedClip}
+                  onApply={applyAiEdit}
+                />
               </div>
             )}
           </div>
@@ -557,6 +664,14 @@ function EditorPage() {
                   bgImageUrl={activeClip?.bgImageUrl ?? null}
                   faceFilter={activeClip?.faceFilter ?? null}
                   onEnded={() => setPlaying(false)}
+                />
+              )}
+              {activePreset && activePreset.overlay !== "none" && (
+                <VfxOverlay
+                  kind={activePreset.overlay}
+                  color={activePreset.overlayColor}
+                  intensity={activePreset.intensity}
+                  playing={playing}
                 />
               )}
               {activeOverlay && (
@@ -739,6 +854,8 @@ function EditorPage() {
               <div
                 key={c.id}
                 onClick={(e) => { e.stopPropagation(); setSelectedClipId(c.id); setSelectedAudioId(null); setCurrentTime(c.start); }}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+                onDrop={(e) => handleDropOnClip(e, c.id)}
                 className={cn(
                   "h-full absolute rounded flex items-center px-3 gap-2 cursor-pointer transition-colors overflow-hidden",
                   selectedClipId === c.id
