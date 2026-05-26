@@ -16,9 +16,13 @@ import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/export-dialog";
 import { PreviewCanvas } from "@/components/preview-canvas";
 import { Waveform } from "@/components/waveform";
+import { VfxOverlay } from "@/components/vfx-overlay";
+import { AiAssistant } from "@/components/ai-assistant";
 import { FACE_FILTERS, type FilterCategory } from "@/lib/face-filters";
 import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
+import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ } from "@/lib/vfx-presets";
+import type { AiEditResult } from "@/lib/ai-edit.functions";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
