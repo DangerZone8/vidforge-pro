@@ -349,8 +349,7 @@ function EditorPage() {
   }, [playing]);
 
   // Effective adjustments: per-clip VFX preset overrides global sliders.
-  const activeClipForFilter = clips.find((c) => currentTime >= c.start && currentTime < c.start + c.duration) ?? null;
-  const activePreset = getPreset(activeClipForFilter?.vfxPresetId);
+  const activePreset = getPreset(activeClip?.vfxPresetId);
   const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
   const filterStyle = activePreset ? adjustmentsToCss(effectiveAdj) :
     `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
