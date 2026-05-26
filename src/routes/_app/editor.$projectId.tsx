@@ -381,23 +381,43 @@ function EditorPage() {
           <div className="flex-1 overflow-y-auto p-3">
             {activePanel === "media" && (
               <div className="space-y-3">
-                <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="w-full">
-                  <Upload className="size-4" /> Upload media
-                </Button>
-                <input ref={fileInputRef} type="file" hidden multiple accept="video/*,audio/*,image/*" onChange={(e) => handleFiles(e.target.files)} />
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-studio-accent"); }}
+                  onDragLeave={(e) => e.currentTarget.classList.remove("border-studio-accent")}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove("border-studio-accent");
+                    handleFiles(e.dataTransfer.files);
+                  }}
+                  className="w-full cursor-pointer border-2 border-dashed border-studio-border rounded-lg p-4 text-center hover:border-studio-accent/60 transition-colors"
+                >
+                  <Upload className="size-5 mx-auto mb-1 text-studio-muted" />
+                  <p className="text-xs font-medium">Drop or click to upload</p>
+                  <p className="text-[10px] text-studio-muted">Video, image or audio</p>
+                </div>
+                <input ref={fileInputRef} type="file" hidden multiple accept="video/*,audio/*,image/*" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
                 <div className="grid grid-cols-2 gap-2">
                   {media.map((m) => (
                     <button key={m.id} onClick={() => addClipFromMedia(m)}
                       className="group aspect-square bg-zinc-900 rounded-lg outline outline-1 -outline-offset-1 outline-white/5 hover:outline-studio-accent transition-all relative overflow-hidden">
                       {m.kind === "video" && m.url ? (
-                        <video src={m.url} className="w-full h-full object-cover" muted />
+                        <video src={m.url} className="w-full h-full object-cover" muted preload="metadata" />
                       ) : m.kind === "image" && m.url ? (
                         <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full grid place-items-center text-studio-muted">
-                          {m.kind === "audio" ? <Music className="size-6" /> : <ImageIcon className="size-6" />}
+                          <Music className="size-6" />
                         </div>
                       )}
+                      <span className={cn(
+                        "absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider",
+                        m.kind === "video" && "bg-studio-accent/80 text-white",
+                        m.kind === "image" && "bg-emerald-500/80 text-white",
+                        m.kind === "audio" && "bg-amber-500/80 text-black",
+                      )}>
+                        {m.kind}
+                      </span>
                       <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-black/70 text-[9px] truncate text-left">{m.name}</div>
                     </button>
                   ))}
@@ -407,6 +427,8 @@ function EditorPage() {
                 )}
               </div>
             )}
+
+
 
             {activePanel === "sounds" && (
               <div className="space-y-3">
