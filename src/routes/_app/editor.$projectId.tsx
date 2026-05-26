@@ -533,18 +533,32 @@ function EditorPage() {
         <div className="flex-1 bg-black flex flex-col min-w-0">
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="relative w-full max-w-5xl aspect-video bg-zinc-900 rounded-xl overflow-hidden shadow-2xl">
-              <PreviewCanvas
-                src={activeClip?.url ?? null}
-                localTime={activeClip ? currentTime - activeClip.start : 0}
-                playing={playing && !!activeClip}
-                adjustmentFilter={filterStyle}
-                bgRemove={!!activeClip?.bgRemove}
-                bgMode={activeClip?.bgMode ?? "color"}
-                bgColor={activeClip?.bgColor ?? "#0a0a14"}
-                bgImageUrl={activeClip?.bgImageUrl ?? null}
-                faceFilter={activeClip?.faceFilter ?? null}
-                onEnded={() => setPlaying(false)}
-              />
+              {activeClip && (activeClip.bgMode === "image" && activeClip.bgImageUrl ? (
+                <img src={activeClip.bgImageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+              ) : activeClip.bgColor && activeClip.kind === "image" ? (
+                <div className="absolute inset-0" style={{ background: activeClip.bgColor }} />
+              ) : null)}
+              {activeClip?.kind === "image" ? (
+                <img
+                  src={activeClip.url}
+                  alt={activeClip.name}
+                  className="relative w-full h-full object-contain"
+                  style={{ filter: filterStyle }}
+                />
+              ) : (
+                <PreviewCanvas
+                  src={activeClip?.url ?? null}
+                  localTime={activeClip ? currentTime - activeClip.start : 0}
+                  playing={playing && !!activeClip}
+                  adjustmentFilter={filterStyle}
+                  bgRemove={!!activeClip?.bgRemove}
+                  bgMode={activeClip?.bgMode ?? "color"}
+                  bgColor={activeClip?.bgColor ?? "#0a0a14"}
+                  bgImageUrl={activeClip?.bgImageUrl ?? null}
+                  faceFilter={activeClip?.faceFilter ?? null}
+                  onEnded={() => setPlaying(false)}
+                />
+              )}
               {activeOverlay && (
                 <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none">
                   <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>
