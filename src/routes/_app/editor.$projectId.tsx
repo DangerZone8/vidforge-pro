@@ -32,6 +32,7 @@ type Clip = {
   id: string;
   mediaId: string;
   name: string;
+  kind: "video" | "image";
   start: number;
   duration: number;
   url?: string;
