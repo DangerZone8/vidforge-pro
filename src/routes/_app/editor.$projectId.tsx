@@ -854,6 +854,8 @@ function EditorPage() {
               <div
                 key={c.id}
                 onClick={(e) => { e.stopPropagation(); setSelectedClipId(c.id); setSelectedAudioId(null); setCurrentTime(c.start); }}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+                onDrop={(e) => handleDropOnClip(e, c.id)}
                 className={cn(
                   "h-full absolute rounded flex items-center px-3 gap-2 cursor-pointer transition-colors overflow-hidden",
                   selectedClipId === c.id
