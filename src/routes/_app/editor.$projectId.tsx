@@ -81,8 +81,9 @@ function EditorPage() {
   const [adj, setAdj] = useState<Adjustments>({ brightness: 100, contrast: 100, saturation: 100, blur: 0 });
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [activePanel, setActivePanel] = useState<"media" | "sounds" | "text" | "effects">("media");
+  const [activePanel, setActivePanel] = useState<"media" | "sounds" | "text" | "effects" | "ai">("media");
   const [filterCategory, setFilterCategory] = useState<FilterCategory>("face");
+  const [vfxCategory, setVfxCategory] = useState<VfxCategory>("cinematic");
   const [exportOpen, setExportOpen] = useState(false);
 
   const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null;
