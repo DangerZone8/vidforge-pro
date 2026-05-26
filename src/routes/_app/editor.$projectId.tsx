@@ -480,6 +480,13 @@ function EditorPage() {
                 <div className="grid grid-cols-2 gap-2">
                   {media.map((m) => (
                     <button key={m.id} onClick={() => addClipFromMedia(m)}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("application/x-creatorcut-media", JSON.stringify({
+                          kind: m.kind, url: m.url, name: m.name,
+                        }));
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
                       className="group aspect-square bg-zinc-900 rounded-lg outline outline-1 -outline-offset-1 outline-white/5 hover:outline-studio-accent transition-all relative overflow-hidden">
                       {m.kind === "video" && m.url ? (
                         <video src={m.url} className="w-full h-full object-cover" muted preload="metadata" />
