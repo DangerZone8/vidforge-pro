@@ -565,18 +565,31 @@ function EditorPage() {
             {activePanel === "effects" && (
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">Color presets</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { name: "Original", adj: { brightness: 100, contrast: 100, saturation: 100, blur: 0 } },
-                      { name: "Vivid", adj: { brightness: 105, contrast: 115, saturation: 140, blur: 0 } },
-                      { name: "Mono", adj: { brightness: 100, contrast: 110, saturation: 0, blur: 0 } },
-                      { name: "Retro", adj: { brightness: 95, contrast: 90, saturation: 80, blur: 0 } },
-                      { name: "Dream", adj: { brightness: 110, contrast: 95, saturation: 110, blur: 1 } },
-                      { name: "Noir", adj: { brightness: 90, contrast: 140, saturation: 0, blur: 0 } },
-                    ].map((p) => (
-                      <button key={p.name} onClick={() => setAdj(p.adj)} className="aspect-square bg-studio-surface border border-studio-border rounded-lg hover:border-studio-accent transition-colors text-[10px] grid place-items-center">
-                        {p.name}
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">VFX & Cinematic Presets</p>
+                  {!selectedClip && (
+                    <p className="text-[10px] text-studio-muted">Select a clip to apply a preset.</p>
+                  )}
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-studio-surface rounded-lg">
+                    {(["cinematic", "scifi", "action", "fantasy", "vfx", "color"] as const).map((c) => (
+                      <button key={c} onClick={() => setVfxCategory(c)}
+                        className={cn("py-1 text-[10px] rounded capitalize transition-colors",
+                          vfxCategory === c ? "bg-zinc-800 text-foreground" : "text-studio-muted")}>{c}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {VFX_PRESETS.filter((p) => p.category === vfxCategory).map((p) => (
+                      <button key={p.id}
+                        disabled={!selectedClip}
+                        onClick={() => updateClip({ vfxPresetId: p.id === "color-original" ? null : p.id })}
+                        className={cn(
+                          "p-2 bg-studio-surface border rounded-lg flex flex-col items-start gap-1 text-left transition-all",
+                          selectedClip?.vfxPresetId === p.id
+                            ? "border-studio-accent ring-1 ring-studio-accent" : "border-studio-border hover:border-studio-accent/60",
+                          !selectedClip && "opacity-50 cursor-not-allowed",
+                        )}>
+                        <span className="text-lg">{p.emoji}</span>
+                        <span className="text-[10px] font-medium leading-tight">{p.name}</span>
+                        <span className="text-[9px] text-studio-muted leading-tight line-clamp-2">{p.description}</span>
                       </button>
                     ))}
                   </div>
@@ -584,9 +597,6 @@ function EditorPage() {
 
                 <div className="space-y-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-studio-muted">Face filters</p>
-                  {!selectedClip && (
-                    <p className="text-[10px] text-studio-muted">Select a clip in the timeline to apply.</p>
-                  )}
                   <div className="grid grid-cols-4 gap-1 p-1 bg-studio-surface rounded-lg">
                     {(["face", "beauty", "lenses", "overlays"] as const).map((c) => (
                       <button key={c} onClick={() => setFilterCategory(c)}
@@ -611,6 +621,16 @@ function EditorPage() {
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {activePanel === "ai" && (
+              <div className="-m-3 h-[calc(100%+1.5rem)]">
+                <AiAssistant
+                  selectedClipName={selectedClip?.name ?? null}
+                  disabled={!selectedClip}
+                  onApply={applyAiEdit}
+                />
               </div>
             )}
           </div>
