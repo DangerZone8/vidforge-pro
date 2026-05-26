@@ -14,13 +14,12 @@ function createSupabaseAdminClient() {
       ...(!SUPABASE_URL ? ['SUPABASE_URL'] : []),
       ...(!SUPABASE_SERVICE_ROLE_KEY ? ['SUPABASE_SERVICE_ROLE_KEY'] : []),
     ];
-    const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Add to .dev.vars or environment.`;
-    console.warn(`[Supabase] ${message}`);
-    // Return a stub client that won't crash but will warn when used
-    // throw new Error(message);
+    const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Connect Supabase in Lovable Cloud.`;
+    console.error(`[Supabase] ${message}`);
+    throw new Error(message);
   }
 
-  return createClient<Database>(SUPABASE_URL || '', SUPABASE_SERVICE_ROLE_KEY || '', {
+  return createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: {
       storage: undefined,
       persistSession: false,
