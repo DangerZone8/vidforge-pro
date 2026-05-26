@@ -348,7 +348,80 @@ function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
 
-  const filterStyle = `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+  // Effective adjustments: per-clip VFX preset overrides global sliders.
+  const activeClipForFilter = clips.find((c) => currentTime >= c.start && currentTime < c.start + c.duration) ?? null;
+  const activePreset = getPreset(activeClipForFilter?.vfxPresetId);
+  const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
+  const filterStyle = activePreset ? adjustmentsToCss(effectiveAdj) :
+    `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+
+  // ---- AI assistant apply ----
+  function applyAiEdit(r: AiEditResult) {
+    if (!selectedClipId) {
+      toast.error("Select a clip first");
+      return;
+    }
+    const patch: Partial<Clip> = {};
+    if (r.presetId) patch.vfxPresetId = r.presetId;
+    if (typeof r.bgRemove === "boolean") patch.bgRemove = r.bgRemove;
+    if (r.bgColor) { patch.bgColor = r.bgColor; patch.bgMode = "color"; }
+    if (r.faceFilter) patch.faceFilter = r.faceFilter;
+    updateClip(patch);
+
+    // Optional: also tweak global adjustments if AI didn't pick a preset
+    if (!r.presetId && r.adjustments) {
+      setAdj((a) => ({
+        ...a,
+        brightness: r.adjustments?.brightness ?? a.brightness,
+        contrast: r.adjustments?.contrast ?? a.contrast,
+        saturation: r.adjustments?.saturation ?? a.saturation,
+        blur: r.adjustments?.blur ?? a.blur,
+      }));
+    }
+
+    // Match a library sound by keyword
+    if (r.soundQuery) {
+      const q = r.soundQuery.toLowerCase();
+      const match = SOUND_LIBRARY.find((s) => s.name.toLowerCase().includes(q) || s.category.includes(q));
+      if (match) {
+        const clip = clips.find((c) => c.id === selectedClipId);
+        if (clip) {
+          // Align with the clip on track 0
+          addAudioFromUrl(match.url, match.name, 0).catch(() => {});
+        }
+      }
+    }
+    toast.success("AI applied to clip");
+  }
+
+  // ---- Drop audio media on a video clip ----
+  function handleDropOnClip(e: React.DragEvent, clipId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const data = e.dataTransfer.getData("application/x-creatorcut-media");
+    if (!data) return;
+    try {
+      const m = JSON.parse(data);
+      const clip = clips.find((c) => c.id === clipId);
+      if (!clip) return;
+      if (m.kind === "audio" && m.url) {
+        addAudioFromUrl(m.url, m.name, 0).then(() => {
+          // Re-position to the clip's start
+          setAudioClips((all) => {
+            const last = all[all.length - 1];
+            if (!last) return all;
+            return all.map((a) => a.id === last.id ? { ...a, start: clip.start } : a);
+          });
+        }).catch(() => {});
+        toast.success(`Attached "${m.name}" to "${clip.name}"`);
+      } else if ((m.kind === "video" || m.kind === "image") && m.url) {
+        // For library sounds dragged in (library entries)
+        if (m.libraryAudio) {
+          addAudioFromUrl(m.url, m.name, 0);
+        }
+      }
+    } catch {}
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
