@@ -58,8 +58,7 @@ export function VfxOverlay({
       switch (kind) {
         case "rain": drawRain(ctx, w, h, intensity, dt, playing, partsRef.current); break;
         case "snow": drawSnow(ctx, w, h, intensity, dt, playing, partsRef.current); break;
-        case "particles":
-        case "stars": drawParticles(ctx, w, h, color, intensity, dt, playing, partsRef.current); break;
+        case "particles": drawParticles(ctx, w, h, color, intensity, dt, playing, partsRef.current); break;
         case "embers": drawEmbers(ctx, w, h, color, intensity, dt, playing, partsRef.current); break;
         case "sparkles": drawSparkles(ctx, w, h, color, intensity, dt, playing, partsRef.current); break;
         case "smoke": drawSmoke(ctx, w, h, intensity, tRef.current); break;
