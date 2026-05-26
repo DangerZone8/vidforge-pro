@@ -666,6 +666,14 @@ function EditorPage() {
                   onEnded={() => setPlaying(false)}
                 />
               )}
+              {activePreset && activePreset.overlay !== "none" && (
+                <VfxOverlay
+                  kind={activePreset.overlay}
+                  color={activePreset.overlayColor}
+                  intensity={activePreset.intensity}
+                  playing={playing}
+                />
+              )}
               {activeOverlay && (
                 <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none">
                   <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>
