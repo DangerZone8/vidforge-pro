@@ -1441,3 +1441,69 @@ function formatTime(sec: number) {
   const f = Math.floor((sec % 1) * 100);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
 }
+
+// Video player for a single timeline clip. Keeps the underlying <video>
+// in sync with the timeline playhead and play/pause state, and unmutes
+// it so the clip's own audio plays alongside the audio-track engine.
+function ClipVideoPlayer({
+  clip,
+  currentTime,
+  playing,
+  muted,
+  filterStyle,
+}: {
+  clip: Clip;
+  currentTime: number;
+  playing: boolean;
+  muted: boolean;
+  filterStyle: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const src = clip.vfxUrl || clip.url || "";
+
+  // Sync src
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.src !== src) el.src = src;
+  }, [src]);
+
+  // Sync playback rate
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.playbackRate = clip.playbackRate || 1;
+  }, [clip.playbackRate]);
+
+  // Sync currentTime when drift exceeds threshold (also fires on seek while paused)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const localTime = Math.max(0, currentTime - clip.start);
+    if (Math.abs(el.currentTime - localTime) > 0.25) {
+      try { el.currentTime = localTime; } catch {}
+    }
+  }, [currentTime, clip.start]);
+
+  // Play / pause
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (playing) {
+      el.play().catch(() => {});
+    } else {
+      el.pause();
+    }
+  }, [playing, src]);
+
+  return (
+    <video
+      ref={ref}
+      muted={muted}
+      playsInline
+      preload="auto"
+      className="w-full h-full object-contain"
+      style={{ filter: filterStyle }}
+    />
+  );
+}
