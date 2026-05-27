@@ -20,11 +20,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(s);
       setLoading(false);
     });
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
-    });
-    return () => subscription.unsubscribe();
+    supabase.auth.getSession()
+      .then(({ data }) => { setSession(data.session); })
+      .catch((err) => { console.error("[auth] getSession failed", err); })
+      .finally(() => { setLoading(false); });
+    // Safety net: never let the app stay stuck on the loading screen.
+    const safety = setTimeout(() => setLoading(false), 4000);
+    return () => { subscription.unsubscribe(); clearTimeout(safety); };
   }, []);
 
   const value: AuthContextValue = {
