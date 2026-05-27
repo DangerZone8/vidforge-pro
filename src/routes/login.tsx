@@ -21,29 +21,72 @@ function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [emailError, setEmailError] = useState("");
 
   useEffect(() => {
     if (!loading && user) navigate({ to: "/dashboard" });
   }, [loading, user, navigate]);
 
+  // Validate email format
+  function validateEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setEmailError("");
+    
+    // Validate email before submission
+    if (!validateEmail(email)) {
+      setEmailError("Please enter a valid email address");
+      return;
+    }
+
+    // Validate password length
+    if (password.length < 6) {
+      toast.error("Password must be at least 6 characters");
+      return;
+    }
+
     setBusy(true);
     try {
       if (mode === "signup") {
+        // Check if email already exists
+        const { data: existingUser } = await supabase.auth.admin?.listUsers() ?? { data: null };
+        if (existingUser?.users?.some(u => u.email === email)) {
+          toast.error("Email already registered. Please sign in instead.");
+          setBusy(false);
+          return;
+        }
+
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: { emailRedirectTo: window.location.origin },
         });
         if (error) throw error;
-        toast.success("Check your email to confirm your account.");
+        toast.success("Account created! Check your email to confirm your account.");
+        // Reset form after successful signup
+        setEmail("");
+        setPassword("");
+        setMode("signin");
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        
+        // Verify session was created
+        if (data.session) {
+          toast.success("Welcome back!");
+          // Navigation happens automatically via useEffect when user is set
+        } else {
+          toast.error("Sign in successful but session not established. Please try again.");
+        }
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Auth failed");
+      const errorMessage = err instanceof Error ? err.message : "Authentication failed";
+      toast.error(errorMessage);
+      console.error("[auth] error:", err);
     } finally {
       setBusy(false);
     }
@@ -51,11 +94,17 @@ function LoginPage() {
 
   async function handleGoogle() {
     setBusy(true);
-    const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
-    if (result.error) {
-      toast.error(result.error.message);
+    try {
+      const result = await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin,
+      });
+      if (result.error) {
+        toast.error(result.error.message || "Google sign-in failed");
+        setBusy(false);
+      }
+    } catch (err) {
+      toast.error("Google sign-in error. Please try again.");
+      console.error("[google auth] error:", err);
       setBusy(false);
     }
   }
@@ -104,11 +153,32 @@ function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@studio.com" />
+              <Input 
+                id="email" 
+                type="email" 
+                required 
+                value={email} 
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setEmailError("");
+                }} 
+                placeholder="you@studio.com"
+                className={emailError ? "border-red-500" : ""}
+              />
+              {emailError && <p className="text-xs text-red-500">{emailError}</p>}
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              <Input 
+                id="password" 
+                type="password" 
+                required 
+                minLength={6} 
+                value={password} 
+                onChange={(e) => setPassword(e.target.value)} 
+                placeholder="••••••••" 
+              />
+              {mode === "signup" && <p className="text-xs text-muted-foreground">Minimum 6 characters</p>}
             </div>
             <Button type="submit" disabled={busy} className="w-full h-10">
               {busy && <Loader2 className="size-4 animate-spin" />}
@@ -131,7 +201,7 @@ function LoginPage() {
 function GoogleIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.24 1.4-1.66 4.1-5.5 4.1-3.3 0-6-2.74-6-6.1s2.7-6.1 6-6.1c1.88 0 3.14.8 3.86 1.5l2.64-2.54C16.93 3.42 14.7 2.4 12 2.4 6.7 2.4 2.4 6.7 2.4 12s4.3 9.6 9.6 9.6c5.54 0 9.2-3.9 9.2-9.4 0-.64-.07-1.13-.16-1.6H12z"/>
+      <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.24 1.4-1.66 4.1-5.5 4.1-3.3 0-6-2.74-6-6.1s2.7-6.1 6-6.1c1.88 0 3.14.8 3.86 1.5l2.64-2.54C16.93 3.42 14.7 2.4 12 2.4 6.7 2.4 2.4 6.7 2.4 12s4.3 9.6 9.6 9.6c5.5 0 9.1-3.85 9.1-9.3 0-.6-.05-1.08-.15-1.55H12" />
     </svg>
   );
 }
