@@ -51,6 +51,8 @@ type Clip = {
   vfxPresetId?: string | null;
   // Storyboard frames
   storyboardFrames?: { time: number; thumbnail?: string }[];
+  // Mute the original video's audio track (song on A1 still plays)
+  muteOriginal?: boolean;
 };
 
 type AudioClip = {
@@ -1000,22 +1002,14 @@ function EditorPage() {
                   className={cn("absolute inset-0", idx > 0 && "pointer-events-none")}
                   style={{ zIndex: activeClips.length - idx }}
                 >
-                  <video
-                    src={clip.vfxUrl || clip.url}
-                    muted
-                    playsInline
-                    className="w-full h-full object-contain"
-                    style={{ filter: filterStyle }}
-                    ref={(el) => {
-                      if (el && playing) {
-                        const localTime = currentTime - clip.start;
-                        if (Math.abs(el.currentTime - localTime) > 0.3) {
-                          el.currentTime = localTime;
-                        }
-                        el.playbackRate = clip.playbackRate || 1;
-                        el.play().catch(() => {});
-                      }
-                    }}
+                  <ClipVideoPlayer
+                    clip={clip}
+                    currentTime={currentTime}
+                    playing={playing}
+                    // Mute secondary overlapping clips to prevent double-audio,
+                    // and respect the per-clip "Mute original audio" toggle.
+                    muted={idx > 0 || !!clip.muteOriginal}
+                    filterStyle={filterStyle}
                   />
                   {activePreset && activePreset.overlay !== "none" && (
                     <VfxOverlay
@@ -1114,6 +1108,15 @@ function EditorPage() {
                   onChange={(v) => updateClip({ playbackRate: v / 100 })}
                   suffix="%"
                 />
+                {selectedClip.kind === "video" && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs">Mute original audio</span>
+                    <Switch
+                      checked={!!selectedClip.muteOriginal}
+                      onCheckedChange={(v) => updateClip({ muteOriginal: v })}
+                    />
+                  </div>
+                )}
                 {selectedClip.vfxPresetApplied && (
                   <div className="p-2 bg-orange-500/10 rounded-lg border border-orange-500/30">
                     <div className="text-xs font-medium text-orange-400">VFX: {selectedClip.vfxPresetApplied}</div>
@@ -1446,4 +1449,70 @@ function formatTime(sec: number) {
   const s = Math.floor(sec % 60);
   const f = Math.floor((sec % 1) * 100);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
+}
+
+// Video player for a single timeline clip. Keeps the underlying <video>
+// in sync with the timeline playhead and play/pause state, and unmutes
+// it so the clip's own audio plays alongside the audio-track engine.
+function ClipVideoPlayer({
+  clip,
+  currentTime,
+  playing,
+  muted,
+  filterStyle,
+}: {
+  clip: Clip;
+  currentTime: number;
+  playing: boolean;
+  muted: boolean;
+  filterStyle: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const src = clip.vfxUrl || clip.url || "";
+
+  // Sync src
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.src !== src) el.src = src;
+  }, [src]);
+
+  // Sync playback rate
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.playbackRate = clip.playbackRate || 1;
+  }, [clip.playbackRate]);
+
+  // Sync currentTime when drift exceeds threshold (also fires on seek while paused)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const localTime = Math.max(0, currentTime - clip.start);
+    if (Math.abs(el.currentTime - localTime) > 0.25) {
+      try { el.currentTime = localTime; } catch {}
+    }
+  }, [currentTime, clip.start]);
+
+  // Play / pause
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (playing) {
+      el.play().catch(() => {});
+    } else {
+      el.pause();
+    }
+  }, [playing, src]);
+
+  return (
+    <video
+      ref={ref}
+      muted={muted}
+      playsInline
+      preload="auto"
+      className="w-full h-full object-contain"
+      style={{ filter: filterStyle }}
+    />
+  );
 }

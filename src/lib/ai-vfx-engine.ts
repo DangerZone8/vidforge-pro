@@ -23,6 +23,7 @@ type VfxCommand =
   | "reverse"
   | "picture-in-picture"
   | "overlay-video"
+  | "marvel"
   | "custom";
 
 export type VfxPresetDef = {
