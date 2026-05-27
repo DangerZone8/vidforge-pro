@@ -262,7 +262,8 @@ function EditorPage() {
       probe.preload = "metadata";
       probe.src = m.url;
       probe.onloadedmetadata = () => {
-        const originalDuration = probe.duration || 5;
+        const rawDur = probe.duration;
+        const originalDuration = Number.isFinite(rawDur) && rawDur > 0 ? rawDur : 5;
         const start = nextAvailableStartOnVideoTrack(0, originalDuration);
         const newClip: Clip = {
           id: crypto.randomUUID(),
