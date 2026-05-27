@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, GripVertical, Video, Headphones } from "lucide-react";
+import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, Video, Headphones } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/export-dialog";
@@ -48,7 +48,6 @@ type Clip = {
   vfxPresetId?: string | null;
   storyboardFrames?: { time: number; thumbnail?: string }[];
   muteOriginal?: boolean;
-  // Track assignment for video clips (0 = V1, supports multiple video tracks)
   videoTrack: number;
 };
 
@@ -65,6 +64,8 @@ type AudioClip = {
   muted: boolean;
   fadeIn: number;
   fadeOut: number;
+  // Mark clips that came from a video file so we can offer "Convert to Video"
+  fromVideo: boolean;
 };
 
 type TextOverlay = { id: string; text: string; start: number; duration: number; color: string };
@@ -93,19 +94,12 @@ function EditorPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [isProcessingVfx, setIsProcessingVfx] = useState(false);
 
-  // Import mode dialog
+  // Import mode dialog — ALWAYS shown for video files
   const [importDialog, setImportDialog] = useState<{
     open: boolean;
     media: any | null;
     resolve: null | ((mode: ImportMode) => void);
   }>({ open: false, media: null, resolve: null });
-
-  // Split type dialog
-  const [splitTypeDialog, setSplitTypeDialog] = useState<{
-    open: boolean;
-    clipId: string | null;
-    part: "first" | "second" | null;
-  }>({ open: false, clipId: null, part: null });
 
   // Dragging state
   const [dragState, setDragState] = useState<{
@@ -146,7 +140,7 @@ function EditorPage() {
       setTitle(project.title);
       const ts = project.timeline_state as any;
       if (ts?.clips) setClips(ts.clips.map((c: any) => ({ videoTrack: 0, ...c })));
-      if (ts?.audioClips) setAudioClips(ts.audioClips);
+      if (ts?.audioClips) setAudioClips(ts.audioClips.map((a: any) => ({ fromVideo: false, ...a })));
       if (ts?.overlays) setOverlays(ts.overlays);
       if (ts?.adjustments) setAdj(ts.adjustments);
       if (ts?.viewMode) setViewMode(ts.viewMode);
@@ -170,20 +164,9 @@ function EditorPage() {
   });
 
   // --- Track helpers ---
+  const audioTrackCount = Math.max(1, audioClips.reduce((max, a) => Math.max(max, a.track + 1), 0));
+  const videoTrackCount = Math.max(1, clips.reduce((max, c) => Math.max(max, c.videoTrack + 1), 0));
 
-  // Compute how many audio tracks are needed
-  const audioTrackCount = Math.max(
-    1,
-    audioClips.reduce((max, a) => Math.max(max, a.track + 1), 0),
-  );
-
-  // Compute how many video tracks are needed
-  const videoTrackCount = Math.max(
-    1,
-    clips.reduce((max, c) => Math.max(max, c.videoTrack + 1), 0),
-  );
-
-  // Find next available start time on a specific video track (no overlap)
   function nextAvailableStartOnVideoTrack(track: number, duration: number): number {
     const trackClips = clips.filter((c) => c.videoTrack === track).sort((a, b) => a.start - b.start);
     for (let t = 0; ; t += 0.1) {
@@ -192,7 +175,6 @@ function EditorPage() {
     }
   }
 
-  // Find next available start time on a specific audio track (no overlap)
   function nextAvailableStartOnAudioTrack(track: number, duration: number): number {
     const trackClips = audioClips.filter((a) => a.track === track).sort((a, b) => a.start - b.start);
     for (let t = 0; ; t += 0.1) {
@@ -201,13 +183,12 @@ function EditorPage() {
     }
   }
 
-  // Find first audio track with space for a clip of given duration
   function findAvailableAudioTrack(duration: number): number {
     for (let t = 0; t < MAX_AUDIO_TRACKS; t++) {
       const trackClips = audioClips.filter((a) => a.track === t);
+      if (trackClips.length === 0) return t;
       const start = nextAvailableStartOnAudioTrack(t, duration);
-      // If start is near 0 or the track is mostly empty, it's a good fit
-      if (trackClips.length === 0 || start <= 0.1) return t;
+      if (start <= 0.1) return t;
     }
     return 0;
   }
@@ -217,9 +198,7 @@ function EditorPage() {
     const dot = name.lastIndexOf(".");
     const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60);
     const ext = (dot > 0 ? name.slice(dot + 1) : "")
-      .replace(/[^a-zA-Z0-9]/g, "")
-      .toLowerCase()
-      .slice(0, 8);
+      .replace(/[^a-zA-Z0-9]/g, "").toLowerCase().slice(0, 8);
     return ext ? `${base}.${ext}` : base || "file";
   }
 
@@ -247,16 +226,14 @@ function EditorPage() {
       ok++;
     }
     refetchMedia();
-    if (ok > 0) toast.success(`${ok} file(s) uploaded`);
+    if (ok > 0) toast.success(`${ok} file(s) uploaded — click to add to timeline`);
   }
 
-  // Ask user how to import media (video or audio-only)
+  // Always ask user for video files: "Add as Video" or "Audio Only"
   function askImportMode(m: any): Promise<ImportMode> {
-    // Audio files always go to audio track
     if (m.kind === "audio") return Promise.resolve("audio");
-    // Image files always go as video track
     if (m.kind === "image") return Promise.resolve("video");
-    // Video files: ask the user
+    // Video files: ALWAYS ask the user
     return new Promise((resolve) => {
       setImportDialog({ open: true, media: m, resolve });
     });
@@ -274,7 +251,8 @@ function EditorPage() {
 
     if (mode === "audio") {
       // Add as audio-only on an audio track
-      addAudioFromUrl(m.url, m.name);
+      // This works for both .audio and .video files — decodeAudio extracts audio track
+      addAudioFromUrl(m.url, m.name, undefined, m.kind === "video");
       return;
     }
 
@@ -303,6 +281,7 @@ function EditorPage() {
         setClips((c) => [...c, newClip]);
         setSelectedClipId(newClip.id);
         generateStoryboardFrames(newClip);
+        toast.success(`"${m.name}" added to V1 — plays video with original audio`);
       };
     } else if (m.kind === "image") {
       const start = nextAvailableStartOnVideoTrack(0, 5);
@@ -364,8 +343,9 @@ function EditorPage() {
     };
   }
 
-  async function addAudioFromUrl(url: string, name: string, preferredTrack?: number) {
+  async function addAudioFromUrl(url: string, name: string, preferredTrack?: number, fromVideo = false) {
     try {
+      // decodeAudio works with both audio files AND video files — it extracts the audio track
       const buf = await decodeAudio(url);
       const duration = buf.duration;
       const track = preferredTrack !== undefined ? preferredTrack : findAvailableAudioTrack(duration);
@@ -383,10 +363,11 @@ function EditorPage() {
         muted: false,
         fadeIn: 0,
         fadeOut: 0,
+        fromVideo,
       };
       setAudioClips((a) => [...a, newClip]);
       setSelectedAudioId(newClip.id);
-      toast.success(`Added "${name}" to A${track + 1}`);
+      toast.success(`"${name}" added to A${track + 1}${fromVideo ? " (audio extracted from video)" : ""}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't load audio");
     }
@@ -402,14 +383,8 @@ function EditorPage() {
       toast.info("Move playhead inside the clip to split");
       return;
     }
-
     const originalSplitTime = c.playbackRate ? splitAt * c.playbackRate : splitAt;
-
-    const a: Clip = {
-      ...c,
-      duration: splitAt,
-    };
-
+    const a: Clip = { ...c, duration: splitAt };
     const b: Clip = {
       ...c,
       id: crypto.randomUUID(),
@@ -417,35 +392,28 @@ function EditorPage() {
       duration: c.duration - splitAt,
       storyboardFrames: c.storyboardFrames?.filter(f => f.time >= originalSplitTime),
     };
-
     setClips((all) => all.flatMap((x) => (x.id === c.id ? [a, b] : [x])));
-    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}`);
+    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}. Use Inspector to convert either part to Audio Only.`);
   }
 
-  // Convert selected video clip to audio-only (removes from video track, adds to audio track)
+  // Convert selected video clip to audio-only
   function convertToAudioOnly(clipId: string) {
     const c = clips.find((x) => x.id === clipId);
     if (!c || !c.url) return;
-
-    // Remove from video clips
     setClips((all) => all.filter((x) => x.id !== clipId));
     if (selectedClipId === clipId) setSelectedClipId(null);
-
-    // Add as audio clip
-    addAudioFromUrl(c.url, c.name);
+    addAudioFromUrl(c.url, c.name, undefined, true);
     toast.success(`"${c.name}" moved to audio track`);
   }
 
-  // Convert audio clip to video clip (if it has a video source)
+  // Convert audio clip back to video (if it came from a video file)
   function convertAudioToVideo(audioId: string) {
     const a = audioClips.find((x) => x.id === audioId);
     if (!a) return;
 
-    // Remove from audio
     setAudioClips((all) => all.filter((x) => x.id !== audioId));
     if (selectedAudioId === audioId) setSelectedAudioId(null);
 
-    // Probe if it's a video file
     const probe = document.createElement("video");
     probe.preload = "metadata";
     probe.src = a.url;
@@ -466,11 +434,10 @@ function EditorPage() {
       };
       setClips((c) => [...c, newClip]);
       setSelectedClipId(newClip.id);
-      toast.success(`"${a.name}" moved to video track`);
+      toast.success(`"${a.name}" moved to V1 — video with audio`);
     };
     probe.onerror = () => {
       toast.error("This audio clip cannot be converted to video");
-      // Re-add the audio clip
       setAudioClips((all) => [...all, a]);
     };
   }
@@ -504,10 +471,7 @@ function EditorPage() {
     const file = files[0];
     const path = `${user.id}/${projectId}/bg-${Date.now()}-${file.name}`;
     const { error } = await supabase.storage.from("media").upload(path, file, { contentType: file.type });
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
+    if (error) { toast.error(error.message); return; }
     const { data: signed } = await supabase.storage.from("media").createSignedUrl(path, 3600);
     updateClip({ bgImageUrl: signed?.signedUrl ?? null, bgMode: "image" });
     toast.success("Background image set");
@@ -524,11 +488,8 @@ function EditorPage() {
   const activeClip = activeClips[0] ?? null;
   const activeOverlay = overlays.find((o) => currentTime >= o.start && currentTime < o.start + o.duration);
 
-  // SMOOTH PLAYBACK ENGINE
-  const playbackRef = useRef<{
-    lastTime: number;
-    animationId: number;
-  }>({ lastTime: 0, animationId: 0 });
+  // ---- PLAYBACK ENGINE ----
+  const playbackRef = useRef<{ lastTime: number; animationId: number }>({ lastTime: 0, animationId: 0 });
 
   useEffect(() => {
     const tick = (timestamp: number) => {
@@ -537,10 +498,7 @@ function EditorPage() {
         playbackRef.current.lastTime = timestamp;
         setCurrentTime((t) => {
           const nt = t + dt;
-          if (nt >= totalDuration) {
-            setPlaying(false);
-            return totalDuration;
-          }
+          if (nt >= totalDuration) { setPlaying(false); return totalDuration; }
           return nt;
         });
       }
@@ -551,16 +509,12 @@ function EditorPage() {
     return () => cancelAnimationFrame(playbackRef.current.animationId);
   }, [playing, totalDuration]);
 
-  // MULTI-TRACK AUDIO PLAYBACK ENGINE
+  // ---- MULTI-TRACK AUDIO PLAYBACK ENGINE ----
   const audioEngineRef = useRef<{
     context: AudioContext | null;
     nodes: Map<string, { source: AudioBufferSourceNode; gain: GainNode; started: boolean }>;
     masterGain: GainNode | null;
-  }>({
-    context: null,
-    nodes: new Map(),
-    masterGain: null,
-  });
+  }>({ context: null, nodes: new Map(), masterGain: null });
 
   useEffect(() => {
     return () => {
@@ -572,7 +526,7 @@ function EditorPage() {
     };
   }, []);
 
-  // Audio playback - plays ALL audio tracks simultaneously synced with video
+  // Audio playback synced with video playhead — ALL audio tracks play together
   useEffect(() => {
     const engine = audioEngineRef.current;
 
@@ -602,6 +556,7 @@ function EditorPage() {
       if (engine.nodes.has(audioClip.id)) return;
 
       try {
+        // decodeAudio extracts audio from any source (audio files + video files)
         const buffer = await decodeAudio(audioClip.url);
         const source = ctx.createBufferSource();
         source.buffer = buffer;
@@ -637,6 +592,7 @@ function EditorPage() {
       }
     });
 
+    // Clean up audio clips that have ended or been muted
     engine.nodes.forEach((node, id) => {
       const clip = audioClips.find((a) => a.id === id);
       if (!clip || clip.muted || currentTime < clip.start || currentTime >= clip.start + clip.duration) {
@@ -660,24 +616,11 @@ function EditorPage() {
     : `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
 
   async function handleApplyVfx(job: VfxJob, presetName: string) {
-    if (!selectedClip || !selectedClip.url) {
-      toast.error("Select a video clip first");
-      return;
-    }
+    if (!selectedClip || !selectedClip.url) { toast.error("Select a video clip first"); return; }
     setIsProcessingVfx(true);
     try {
-      const result = await processVfxJob({
-        ...job,
-        inputUrl: selectedClip.url,
-        onProgress: () => {},
-      });
-      setClips((all) =>
-        all.map((c) =>
-          c.id === selectedClip.id
-            ? { ...c, vfxUrl: result.outputUrl, vfxPresetApplied: presetName, duration: result.duration, playbackRate: 1 }
-            : c
-        )
-      );
+      const result = await processVfxJob({ ...job, inputUrl: selectedClip.url, onProgress: () => {} });
+      setClips((all) => all.map((c) => c.id === selectedClip.id ? { ...c, vfxUrl: result.outputUrl, vfxPresetApplied: presetName, duration: result.duration, playbackRate: 1 } : c));
       toast.success("VFX applied successfully!");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "VFX processing failed");
@@ -699,10 +642,7 @@ function EditorPage() {
       }
       if (!item) return;
       setDragState({
-        type,
-        id,
-        startX: e.clientX,
-        startTime: item.start,
+        type, id, startX: e.clientX, startTime: item.start,
         startDuration: item.duration,
         startOriginalDuration: type.startsWith("audio") ? (item as AudioClip).originalDuration : item.duration,
       });
@@ -715,125 +655,77 @@ function EditorPage() {
     const handleMouseMove = (e: MouseEvent) => {
       const dx = e.clientX - dragState.startX;
       const dt = dx / PX_PER_SEC;
-
       if (dragState.type === "audio-start") {
         const newStart = Math.max(0, dragState.startTime + dt);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
-        setAudioClips((all) =>
-          all.map((a) =>
-            a.id === dragState.id
-              ? { ...a, start: newStart, duration: newDuration, playbackRate: a.originalDuration / newDuration }
-              : a
-          )
-        );
+        setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, start: newStart, duration: newDuration, playbackRate: a.originalDuration / newDuration } : a));
       } else if (dragState.type === "audio-end") {
         const newDuration = Math.max(0.5, dragState.startDuration + dt);
         const clip = audioClips.find((a) => a.id === dragState.id);
         const originalDuration = clip?.originalDuration ?? dragState.startOriginalDuration;
-        setAudioClips((all) =>
-          all.map((a) =>
-            a.id === dragState.id
-              ? { ...a, duration: newDuration, playbackRate: originalDuration / newDuration }
-              : a
-          )
-        );
+        setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, duration: newDuration, playbackRate: originalDuration / newDuration } : a));
       } else if (dragState.type === "clip-start") {
         const newStart = Math.max(0, dragState.startTime + dt);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
-        setClips((all) =>
-          all.map((c) => (c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c))
-        );
+        setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c)));
       } else if (dragState.type === "clip-end") {
         const newDuration = Math.max(0.5, dragState.startDuration + dt);
-        setClips((all) =>
-          all.map((c) => (c.id === dragState.id ? { ...c, duration: newDuration } : c))
-        );
+        setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, duration: newDuration } : c)));
       }
     };
     const handleMouseUp = () => { setDragState(null); };
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
+    return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
   }, [dragState, audioClips, clips]);
 
-  // Add a new audio track
   function addAudioTrack() {
-    if (audioTrackCount >= MAX_AUDIO_TRACKS) {
-      toast.error(`Maximum ${MAX_AUDIO_TRACKS} audio tracks`);
-      return;
-    }
+    if (audioTrackCount >= MAX_AUDIO_TRACKS) { toast.error(`Maximum ${MAX_AUDIO_TRACKS} audio tracks`); return; }
     toast.success(`Audio track A${audioTrackCount + 1} added`);
   }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-studio-bg">
-      {/* Import Mode Dialog */}
+      {/* Import Mode Dialog — ALWAYS shown for video files */}
       <Dialog open={importDialog.open} onOpenChange={(open) => { if (!open) handleImportChoice("video"); }}>
-        <DialogContent className="bg-studio-surface border-studio-border">
+        <DialogContent className="bg-studio-surface border-studio-border max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add Media to Timeline</DialogTitle>
-            <DialogDescription>How do you want to use "{importDialog.media?.name}"?</DialogDescription>
+            <DialogTitle className="text-base">Add to Timeline</DialogTitle>
+            <DialogDescription className="text-sm">
+              How do you want to use <strong className="text-foreground">{importDialog.media?.name}</strong>?
+            </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 pt-2">
             <button
               onClick={() => handleImportChoice("video")}
-              className="flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-studio-border hover:border-orange-500 transition-colors bg-studio-bg group"
+              className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-studio-border hover:border-orange-500 transition-colors bg-studio-bg group"
             >
               <div className="size-14 rounded-xl bg-orange-500/20 grid place-items-center group-hover:bg-orange-500/30 transition-colors">
                 <Video className="size-7 text-orange-400" />
               </div>
               <div className="text-sm font-semibold">Add as Video</div>
-              <div className="text-[10px] text-studio-muted text-center">Shows video visuals on V1 track with original audio</div>
+              <div className="text-[10px] text-studio-muted text-center leading-relaxed">
+                Show visuals on V1 track. Original audio plays alongside audio tracks.
+              </div>
             </button>
             <button
               onClick={() => handleImportChoice("audio")}
-              className="flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-studio-border hover:border-blue-500 transition-colors bg-studio-bg group"
+              className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-studio-border hover:border-blue-500 transition-colors bg-studio-bg group"
             >
               <div className="size-14 rounded-xl bg-blue-500/20 grid place-items-center group-hover:bg-blue-500/30 transition-colors">
                 <Headphones className="size-7 text-blue-400" />
               </div>
               <div className="text-sm font-semibold">Audio Only</div>
-              <div className="text-[10px] text-studio-muted text-center">Places on audio track, no video shown</div>
+              <div className="text-[10px] text-studio-muted text-center leading-relaxed">
+                Extract audio and place on A1 track. No video shown — perfect for background music.
+              </div>
             </button>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Split Type Dialog */}
-      <Dialog open={splitTypeDialog.open} onOpenChange={(open) => { if (!open) setSplitTypeDialog({ open: false, clipId: null, part: null }); }}>
-        <DialogContent className="bg-studio-surface border-studio-border">
-          <DialogHeader>
-            <DialogTitle>Change Clip Type</DialogTitle>
-            <DialogDescription>Convert this clip segment between Video and Audio Only</DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 pt-2">
-            <button
-              onClick={() => {
-                if (splitTypeDialog.clipId) convertToAudioOnly(splitTypeDialog.clipId);
-                setSplitTypeDialog({ open: false, clipId: null, part: null });
-              }}
-              className="flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-studio-border hover:border-blue-500 transition-colors bg-studio-bg group"
-            >
-              <Headphones className="size-7 text-blue-400" />
-              <div className="text-sm font-semibold">Audio Only</div>
-              <div className="text-[10px] text-studio-muted text-center">Move to audio track, no video</div>
-            </button>
-            <button
-              onClick={() => {
-                setSplitTypeDialog({ open: false, clipId: null, part: null });
-              }}
-              className="flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-studio-border hover:border-orange-500 transition-colors bg-studio-bg group"
-            >
-              <Video className="size-7 text-orange-400" />
-              <div className="text-sm font-semibold">Keep as Video</div>
-              <div className="text-[10px] text-studio-muted text-center">Stays on video track with visuals</div>
-            </button>
-          </div>
+          <p className="text-[10px] text-studio-muted text-center pt-2">
+            Both play together in sync — video on top, audio tracks below.
+          </p>
         </DialogContent>
       </Dialog>
 
@@ -849,20 +741,13 @@ function EditorPage() {
             onBlur={() => saveProject.mutate()}
             className="h-8 border-none bg-transparent hover:bg-studio-bg focus-visible:bg-studio-bg w-64 font-medium text-sm"
           />
-          <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded uppercase tracking-wider">
-            Auto-save
-          </span>
+          <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded uppercase tracking-wider">Auto-save</span>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={() => saveProject.mutate()} disabled={saveProject.isPending}>
-            {saveProject.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-            Save
+            {saveProject.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Save
           </Button>
-          <Button
-            size="sm"
-            className="bg-gradient-to-r from-orange-500 to-pink-600 hover:from-orange-600 hover:to-pink-700 text-white"
-            onClick={() => setExportOpen(true)}
-          >
+          <Button size="sm" className="bg-gradient-to-r from-orange-500 to-pink-600 hover:from-orange-600 hover:to-pink-700 text-white" onClick={() => setExportOpen(true)}>
             <Download className="size-4" /> Export
           </Button>
         </div>
@@ -896,25 +781,14 @@ function EditorPage() {
                   onClick={() => fileInputRef.current?.click()}
                   onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-orange-500"); }}
                   onDragLeave={(e) => e.currentTarget.classList.remove("border-orange-500")}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.currentTarget.classList.remove("border-orange-500");
-                    handleFiles(e.dataTransfer.files);
-                  }}
+                  onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("border-orange-500"); handleFiles(e.dataTransfer.files); }}
                   className="w-full cursor-pointer border-2 border-dashed border-studio-border rounded-lg p-6 text-center hover:border-orange-500/60 transition-colors"
                 >
                   <Upload className="size-8 mx-auto mb-2 text-studio-muted" />
                   <p className="text-sm font-medium">Drop or click to upload</p>
                   <p className="text-xs text-studio-muted mt-1">Video, image or audio files</p>
                 </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  hidden
-                  multiple
-                  accept="video/*,audio/*,image/*"
-                  onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
-                />
+                <input ref={fileInputRef} type="file" hidden multiple accept="video/*,audio/*,image/*" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
                 <div className="grid grid-cols-2 gap-2">
                   {media.map((m) => (
                     <button
@@ -931,49 +805,41 @@ function EditorPage() {
                           <Music className="size-6" />
                         </div>
                       )}
-                      <span
-                        className={cn(
-                          "absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider",
-                          m.kind === "video" && "bg-orange-500/80 text-white",
-                          m.kind === "image" && "bg-emerald-500/80 text-white",
-                          m.kind === "audio" && "bg-blue-500/80 text-white"
-                        )}
-                      >
+                      <span className={cn(
+                        "absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider",
+                        m.kind === "video" && "bg-orange-500/80 text-white",
+                        m.kind === "image" && "bg-emerald-500/80 text-white",
+                        m.kind === "audio" && "bg-blue-500/80 text-white"
+                      )}>
                         {m.kind}
                       </span>
-                      <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-black/80 backdrop-blur text-[9px] truncate text-left">
-                        {m.name}
-                      </div>
+                      {m.kind === "video" && (
+                        <span className="absolute top-1 right-1 px-1 py-0.5 rounded text-[7px] bg-white/20 text-white">
+                          Click to choose
+                        </span>
+                      )}
+                      <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-black/80 backdrop-blur text-[9px] truncate text-left">{m.name}</div>
                     </button>
                   ))}
                 </div>
-                {media.length === 0 && (
-                  <p className="text-xs text-studio-muted text-center py-8">No media yet. Upload to get started.</p>
-                )}
+                {media.length === 0 && <p className="text-xs text-studio-muted text-center py-8">No media yet. Upload to get started.</p>}
               </div>
             )}
 
             {activePanel === "sounds" && (
               <div className="p-3 space-y-3">
                 <div className="flex items-center gap-2 text-xs text-studio-muted">
-                  <Library className="size-3.5" /> Free sound library
+                  <Library className="size-3.5" /> Free sound library — adds to audio tracks
                 </div>
                 <div className="space-y-1.5">
                   {SOUND_LIBRARY.map((s) => (
                     <div key={s.id} className="group flex items-center gap-2 p-2 bg-studio-bg rounded-lg border border-studio-border">
-                      <div className="size-8 grid place-items-center bg-blue-500/20 text-blue-400 rounded">
-                        <Music className="size-3.5" />
-                      </div>
+                      <div className="size-8 grid place-items-center bg-blue-500/20 text-blue-400 rounded"><Music className="size-3.5" /></div>
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-medium truncate">{s.name}</div>
-                        <div className="text-[10px] text-studio-muted capitalize">
-                          {s.category} &middot; {formatTime(s.duration)}
-                        </div>
+                        <div className="text-[10px] text-studio-muted capitalize">{s.category} &middot; {formatTime(s.duration)}</div>
                       </div>
-                      <button
-                        onClick={() => addAudioFromUrl(s.url, s.name)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded bg-blue-500 text-white hover:scale-105"
-                      >
+                      <button onClick={() => addAudioFromUrl(s.url, s.name)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded bg-blue-500 text-white hover:scale-105">
                         <Plus className="size-3.5" />
                       </button>
                     </div>
@@ -984,29 +850,13 @@ function EditorPage() {
 
             {activePanel === "text" && (
               <div className="p-3 space-y-3">
-                <Button variant="outline" onClick={addText} className="w-full">
-                  <Type className="size-4" /> Add text overlay
-                </Button>
+                <Button variant="outline" onClick={addText} className="w-full"><Type className="size-4" /> Add text overlay</Button>
                 {overlays.map((o) => (
                   <div key={o.id} className="p-2 bg-studio-bg rounded-lg space-y-2 border border-studio-border">
-                    <Input
-                      value={o.text}
-                      onChange={(e) => setOverlays((all) => all.map((x) => (x.id === o.id ? { ...x, text: e.target.value } : x)))}
-                      className="h-7 text-xs"
-                    />
+                    <Input value={o.text} onChange={(e) => setOverlays((all) => all.map((x) => (x.id === o.id ? { ...x, text: e.target.value } : x)))} className="h-7 text-xs" />
                     <div className="flex gap-2 items-center">
-                      <input
-                        type="color"
-                        value={o.color}
-                        onChange={(e) => setOverlays((all) => all.map((x) => (x.id === o.id ? { ...x, color: e.target.value } : x)))}
-                        className="size-7 rounded cursor-pointer"
-                      />
-                      <button
-                        onClick={() => setOverlays((all) => all.filter((x) => x.id !== o.id))}
-                        className="ml-auto text-studio-muted hover:text-destructive"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+                      <input type="color" value={o.color} onChange={(e) => setOverlays((all) => all.map((x) => (x.id === o.id ? { ...x, color: e.target.value } : x)))} className="size-7 rounded cursor-pointer" />
+                      <button onClick={() => setOverlays((all) => all.filter((x) => x.id !== o.id))} className="ml-auto text-studio-muted hover:text-destructive"><Trash2 className="size-3.5" /></button>
                     </div>
                   </div>
                 ))}
@@ -1020,16 +870,7 @@ function EditorPage() {
                   {!selectedClip && <p className="text-[10px] text-studio-muted">Select a clip to apply a preset.</p>}
                   <div className="grid grid-cols-3 gap-1 p-1 bg-studio-bg rounded-lg">
                     {(["cinematic", "scifi", "action", "fantasy", "vfx", "color"] as const).map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => setVfxCategory(c)}
-                        className={cn(
-                          "py-1 text-[10px] rounded capitalize transition-colors",
-                          vfxCategory === c ? "bg-orange-500/20 text-orange-400" : "text-studio-muted hover:text-foreground"
-                        )}
-                      >
-                        {c}
-                      </button>
+                      <button key={c} onClick={() => setVfxCategory(c)} className={cn("py-1 text-[10px] rounded capitalize transition-colors", vfxCategory === c ? "bg-orange-500/20 text-orange-400" : "text-studio-muted hover:text-foreground")}>{c}</button>
                     ))}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -1040,9 +881,7 @@ function EditorPage() {
                         onClick={() => updateClip({ vfxPresetId: p.id === "color-original" ? null : p.id })}
                         className={cn(
                           "p-2 bg-studio-bg border rounded-lg flex flex-col items-start gap-1 text-left transition-all",
-                          selectedClip?.vfxPresetId === p.id
-                            ? "border-orange-500 ring-1 ring-orange-500"
-                            : "border-studio-border hover:border-orange-500/60",
+                          selectedClip?.vfxPresetId === p.id ? "border-orange-500 ring-1 ring-orange-500" : "border-studio-border hover:border-orange-500/60",
                           !selectedClip && "opacity-50 cursor-not-allowed"
                         )}
                       >
@@ -1059,11 +898,7 @@ function EditorPage() {
             {activePanel === "ai" && (
               <div className="h-full">
                 <AiVfxAssistant
-                  selectedClip={
-                    selectedClip && selectedClip.url
-                      ? { id: selectedClip.id, url: selectedClip.vfxUrl || selectedClip.url, name: selectedClip.name, start: selectedClip.start, duration: selectedClip.duration }
-                      : null
-                  }
+                  selectedClip={selectedClip && selectedClip.url ? { id: selectedClip.id, url: selectedClip.vfxUrl || selectedClip.url, name: selectedClip.name, start: selectedClip.start, duration: selectedClip.duration } : null}
                   disabled={!selectedClip}
                   onApplyVfx={handleApplyVfx}
                   isProcessing={isProcessingVfx}
@@ -1076,66 +911,46 @@ function EditorPage() {
         {/* Center preview */}
         <div className="flex-1 bg-black flex flex-col min-w-0">
           <div className="h-10 border-b border-studio-border flex items-center px-4 gap-2 bg-studio-surface/50">
-            <Button
-              variant={viewMode === "timeline" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("timeline")}
-              className={cn("h-7 text-xs", viewMode === "timeline" && "bg-orange-500/20 text-orange-400")}
-            >
+            <Button variant={viewMode === "timeline" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("timeline")} className={cn("h-7 text-xs", viewMode === "timeline" && "bg-orange-500/20 text-orange-400")}>
               <Clock className="size-3" /> Timeline
             </Button>
-            <Button
-              variant={viewMode === "storyboard" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("storyboard")}
-              className={cn("h-7 text-xs", viewMode === "storyboard" && "bg-orange-500/20 text-orange-400")}
-            >
+            <Button variant={viewMode === "storyboard" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("storyboard")} className={cn("h-7 text-xs", viewMode === "storyboard" && "bg-orange-500/20 text-orange-400")}>
               <LayoutGrid className="size-3" /> Storyboard
             </Button>
           </div>
 
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="relative w-full max-w-5xl aspect-video bg-zinc-900 rounded-xl overflow-hidden shadow-2xl border border-studio-border">
+              {/* Video preview — all active clips play together */}
               {activeClips.map((clip, idx) => (
-                <div
-                  key={clip.id}
-                  className={cn("absolute inset-0", idx > 0 && "pointer-events-none")}
-                  style={{ zIndex: activeClips.length - idx }}
-                >
-                  <ClipVideoPlayer
-                    clip={clip}
-                    currentTime={currentTime}
-                    playing={playing}
-                    muted={idx > 0 || !!clip.muteOriginal}
-                    filterStyle={filterStyle}
-                  />
+                <div key={clip.id} className={cn("absolute inset-0", idx > 0 && "pointer-events-none")} style={{ zIndex: activeClips.length - idx }}>
+                  <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} />
                   {activePreset && activePreset.overlay !== "none" && (
-                    <VfxOverlay
-                      kind={activePreset.overlay}
-                      color={activePreset.overlayColor}
-                      intensity={activePreset.intensity}
-                      playing={playing}
-                    />
+                    <VfxOverlay kind={activePreset.overlay} color={activePreset.overlayColor} intensity={activePreset.intensity} playing={playing} />
                   )}
                 </div>
               ))}
               {activeOverlay && (
                 <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none z-20">
-                  <span
-                    className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg"
-                    style={{ color: activeOverlay.color }}
-                  >
-                    {activeOverlay.text}
-                  </span>
+                  <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>{activeOverlay.text}</span>
                 </div>
               )}
-              {clips.length === 0 && (
+              {clips.length === 0 && audioClips.length === 0 && (
                 <div className="absolute inset-0 grid place-items-center text-center text-studio-muted pointer-events-none">
                   <div>
                     <Film className="size-12 mx-auto opacity-30 mb-2" />
                     <p className="text-sm">Upload media and click to add to timeline</p>
-                    <p className="text-xs text-studio-muted mt-1">Videos go to V1, audio goes to A1-A8</p>
+                    <p className="text-xs text-studio-muted mt-1">Videos go to V1, audio to A1-A8 — all play in sync</p>
                   </div>
+                </div>
+              )}
+              {/* Playback indicator showing synced audio */}
+              {playing && audioClips.filter(a => !a.muted && currentTime >= a.start && currentTime < a.start + a.duration).length > 0 && (
+                <div className="absolute top-3 right-3 glass rounded-lg px-3 py-1.5 flex items-center gap-2 z-30">
+                  <Volume2 className="size-3.5 text-blue-400" />
+                  <span className="text-[10px] text-blue-300 font-medium">
+                    {audioClips.filter(a => !a.muted && currentTime >= a.start && currentTime < a.start + a.duration).length} audio track{audioClips.filter(a => !a.muted && currentTime >= a.start && currentTime < a.start + a.duration).length !== 1 && "s"} playing
+                  </span>
                 </div>
               )}
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 glass rounded-full px-5 py-2.5 flex items-center gap-4 z-30">
@@ -1167,6 +982,10 @@ function EditorPage() {
 
             {selectedClip && (
               <Section title={`Clip: ${selectedClip.name}`} icon={<Film className="size-3.5 text-orange-400" />}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-studio-muted">Track</span>
+                  <span className="text-xs font-semibold text-orange-400">V{selectedClip.videoTrack + 1}</span>
+                </div>
                 <AdjustSlider label="Duration (s)" value={Math.round(selectedClip.duration)} min={0.5} max={600} onChange={(v) => updateClip({ duration: v })} />
                 <AdjustSlider label="Playback Speed" value={Math.round((selectedClip.playbackRate || 1) * 100)} min={10} max={400} onChange={(v) => updateClip({ playbackRate: v / 100 })} suffix="%" />
                 {selectedClip.kind === "video" && (
@@ -1175,18 +994,13 @@ function EditorPage() {
                       <span className="text-xs">Mute original audio</span>
                       <Switch checked={!!selectedClip.muteOriginal} onCheckedChange={(v) => updateClip({ muteOriginal: v })} />
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs">Video Track</span>
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs font-medium text-orange-400">V{selectedClip.videoTrack + 1}</span>
-                      </div>
-                    </div>
                     <button
-                      onClick={() => setSplitTypeDialog({ open: true, clipId: selectedClip.id, part: null })}
-                      className="w-full text-xs px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-500/20 transition-colors"
+                      onClick={() => convertToAudioOnly(selectedClip.id)}
+                      className="w-full text-xs px-3 py-2.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-500/20 transition-colors flex items-center justify-center gap-2"
                     >
-                      <Headphones className="size-3 inline mr-1" /> Convert to Audio Only
+                      <Headphones className="size-3.5" /> Convert to Audio Only
                     </button>
+                    <p className="text-[9px] text-studio-muted text-center">Moves this clip to an audio track — video hidden, only sound plays</p>
                   </>
                 )}
                 {selectedClip.vfxPresetApplied && (
@@ -1200,9 +1014,16 @@ function EditorPage() {
             {selectedAudio && (
               <Section title={`Audio: ${selectedAudio.name}`} icon={<Music className="size-3.5 text-blue-400" />}>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs">Track</span>
-                  <span className="text-xs font-medium text-blue-400">A{selectedAudio.track + 1}</span>
+                  <span className="text-xs text-studio-muted">Track</span>
+                  <span className="text-xs font-semibold text-blue-400">A{selectedAudio.track + 1}</span>
                 </div>
+                {selectedAudio.fromVideo && (
+                  <div className="p-2 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                    <div className="text-[10px] text-blue-300 flex items-center gap-1.5">
+                      <Video className="size-3" /> Audio extracted from video file
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-xs">Mute</span>
                   <Switch checked={selectedAudio.muted} onCheckedChange={(v) => updateAudio(selectedAudio.id, { muted: v })} />
@@ -1212,20 +1033,26 @@ function EditorPage() {
                 <AdjustSlider label="Fade out (s)" value={selectedAudio.fadeOut} min={0} max={Math.floor(selectedAudio.duration)} onChange={(v) => updateAudio(selectedAudio.id, { fadeOut: v })} />
                 <div className="p-2 bg-blue-500/10 rounded-lg border border-blue-500/30">
                   <div className="text-xs text-studio-muted mb-1">Time Stretch</div>
-                  <div className="text-sm font-medium text-blue-400">
-                    {((selectedAudio.originalDuration / selectedAudio.duration) * 100).toFixed(0)}%
-                  </div>
+                  <div className="text-sm font-medium text-blue-400">{((selectedAudio.originalDuration / selectedAudio.duration) * 100).toFixed(0)}%</div>
                 </div>
+                {selectedAudio.fromVideo && (
+                  <button
+                    onClick={() => convertAudioToVideo(selectedAudio.id)}
+                    className="w-full text-xs px-3 py-2.5 rounded-lg bg-orange-500/10 border border-orange-500/30 text-orange-400 hover:bg-orange-500/20 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Video className="size-3.5" /> Convert back to Video
+                  </button>
+                )}
               </Section>
             )}
 
             <div className="p-3 bg-gradient-to-r from-orange-500/10 to-pink-500/10 rounded-xl border border-orange-500/20">
               <div className="flex items-center gap-2 mb-1.5">
                 <Wand2 className="size-3.5 text-orange-400" />
-                <span className="text-xs font-semibold">Pro Tip</span>
+                <span className="text-xs font-semibold">How It Works</span>
               </div>
               <p className="text-[10px] text-studio-muted leading-relaxed">
-                Videos go to V1, audio files auto-add to A1-A8. Split a clip then convert either part to Audio Only. All tracks play together in sync.
+                Click a video file to choose Video or Audio Only. Videos go to V1 with visuals, audio goes to A1-A8 tracks. All tracks play together in sync — add a dancing video to V1 and a song to A1, and they play simultaneously.
               </p>
             </div>
           </div>
@@ -1238,7 +1065,7 @@ function EditorPage() {
           {viewMode === "timeline" ? (
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId}>
-                <Split className="size-3.5" /> Split at Playhead
+                <Split className="size-3.5" /> Split
               </Button>
               <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId}>
                 <Trash2 className="size-3.5" /> Delete
@@ -1250,9 +1077,7 @@ function EditorPage() {
           ) : (
             <div className="text-xs text-studio-muted">Click a frame to jump to that time</div>
           )}
-          <div className="text-[11px] font-mono text-studio-muted">
-            {formatTime(currentTime)} / {formatTime(totalDuration)}
-          </div>
+          <div className="text-[11px] font-mono text-studio-muted">{formatTime(currentTime)} / {formatTime(totalDuration)}</div>
         </div>
 
         {viewMode === "timeline" ? (
@@ -1267,30 +1092,22 @@ function EditorPage() {
               }
             }}
           >
-            {/* Video tracks */}
+            {/* Video tracks (top) */}
             {Array.from({ length: videoTrackCount }).map((_, ti) => (
-              <TimelineRow key={`v${ti}`} label={`V${ti + 1}`} height="h-16" labelColor="text-orange-400">
+              <TimelineRow key={`v${ti}`} label={`V${ti + 1}`} height="h-16" labelColor="text-orange-400" bgColor="bg-orange-500/5">
                 {clips
                   .filter((c) => c.videoTrack === ti)
                   .map((c) => (
                     <div
                       key={c.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedClipId(c.id);
-                        setSelectedAudioId(null);
-                        handleSeek(c.start);
-                      }}
+                      onClick={(e) => { e.stopPropagation(); setSelectedClipId(c.id); setSelectedAudioId(null); handleSeek(c.start); }}
                       className={cn(
                         "h-full absolute rounded flex items-center px-3 gap-2 cursor-pointer transition-colors overflow-hidden group",
                         selectedClipId === c.id
                           ? "bg-gradient-to-r from-orange-500/30 to-pink-500/30 border-2 border-orange-500"
                           : "bg-gradient-to-r from-orange-500/15 to-pink-500/15 border border-orange-500/40 hover:border-orange-500"
                       )}
-                      style={{
-                        width: `${c.duration * PX_PER_SEC}px`,
-                        left: `${c.start * PX_PER_SEC}px`,
-                      }}
+                      style={{ width: `${c.duration * PX_PER_SEC}px`, left: `${c.start * PX_PER_SEC}px` }}
                     >
                       <div className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-orange-500/30" onMouseDown={(e) => handleMouseDown(e, "clip-start", c.id)} />
                       <div className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-orange-500/30" onMouseDown={(e) => handleMouseDown(e, "clip-end", c.id)} />
@@ -1301,48 +1118,42 @@ function EditorPage() {
                       {c.muteOriginal && <VolumeX className="size-3 text-studio-muted ml-auto shrink-0" />}
                     </div>
                   ))}
-                {clips.filter((c) => c.videoTrack === ti).length === 0 && (
-                  <div className="text-xs text-studio-muted px-3 self-center">Drop video clips here</div>
+                {clips.filter((c) => c.videoTrack === ti).length === 0 && ti === 0 && (
+                  <div className="text-xs text-studio-muted px-3 self-center">Click a video file to add here</div>
                 )}
               </TimelineRow>
             ))}
 
+            {/* Divider between video and audio tracks */}
+            <div className="h-px bg-studio-border/50 my-1" />
+
             {/* Text track */}
-            <TimelineRow label="T1" height="h-8" labelColor="text-amber-400">
+            <TimelineRow label="T1" height="h-8" labelColor="text-amber-400" bgColor="bg-amber-500/5">
               {overlays.map((o) => (
-                <div
-                  key={o.id}
-                  className="h-full absolute bg-amber-500/20 border border-amber-500/40 rounded flex items-center px-2"
-                  style={{ width: `${o.duration * PX_PER_SEC}px`, left: `${o.start * PX_PER_SEC}px` }}
-                >
+                <div key={o.id} className="h-full absolute bg-amber-500/20 border border-amber-500/40 rounded flex items-center px-2" style={{ width: `${o.duration * PX_PER_SEC}px`, left: `${o.start * PX_PER_SEC}px` }}>
                   <span className="text-[9px] font-medium truncate">{o.text}</span>
                 </div>
               ))}
             </TimelineRow>
 
-            {/* Audio tracks */}
+            {/* Audio tracks (below video) */}
             {Array.from({ length: audioTrackCount }).map((_, ti) => (
-              <TimelineRow key={`a${ti}`} label={`A${ti + 1}`} height="h-10" labelColor="text-blue-400">
+              <TimelineRow key={`a${ti}`} label={`A${ti + 1}`} height="h-10" labelColor="text-blue-400" bgColor="bg-blue-500/5">
                 {audioClips
                   .filter((a) => a.track === ti)
                   .map((a) => (
                     <div
                       key={a.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedAudioId(a.id);
-                        setSelectedClipId(null);
-                      }}
+                      onClick={(e) => { e.stopPropagation(); setSelectedAudioId(a.id); setSelectedClipId(null); }}
                       className={cn(
                         "h-full absolute rounded flex items-center gap-1 cursor-pointer transition-colors overflow-hidden group",
                         selectedAudioId === a.id
                           ? "bg-blue-500/30 border-2 border-blue-400"
-                          : "bg-blue-500/15 border border-blue-500/40 hover:border-blue-500"
+                          : a.fromVideo
+                            ? "bg-gradient-to-r from-blue-500/15 to-purple-500/15 border border-blue-500/40 hover:border-blue-500"
+                            : "bg-blue-500/15 border border-blue-500/40 hover:border-blue-500"
                       )}
-                      style={{
-                        width: `${a.duration * PX_PER_SEC}px`,
-                        left: `${a.start * PX_PER_SEC}px`,
-                      }}
+                      style={{ width: `${a.duration * PX_PER_SEC}px`, left: `${a.start * PX_PER_SEC}px` }}
                     >
                       <div className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-500/30 z-10" onMouseDown={(e) => handleMouseDown(e, "audio-start", a.id)} />
                       <div className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-500/30 z-10" onMouseDown={(e) => handleMouseDown(e, "audio-end", a.id)} />
@@ -1357,14 +1168,20 @@ function EditorPage() {
                         <span className="absolute top-0.5 left-1 text-[9px] font-medium truncate text-blue-100/90 pointer-events-none">
                           {a.name}
                         </span>
-                        {a.playbackRate !== 1 && (
-                          <span className="absolute bottom-0.5 right-1 text-[8px] text-blue-300/70">
-                            {((1 / a.playbackRate) * 100).toFixed(0)}%
+                        {a.fromVideo && (
+                          <span className="absolute top-0.5 right-1 text-[7px] text-purple-300/80 pointer-events-none">
+                            from video
                           </span>
+                        )}
+                        {a.playbackRate !== 1 && (
+                          <span className="absolute bottom-0.5 right-1 text-[8px] text-blue-300/70">{((1 / a.playbackRate) * 100).toFixed(0)}%</span>
                         )}
                       </div>
                     </div>
                   ))}
+                {audioClips.filter((a) => a.track === ti).length === 0 && ti === 0 && (
+                  <div className="text-xs text-studio-muted px-3 self-center">Audio tracks play together with video</div>
+                )}
               </TimelineRow>
             ))}
 
@@ -1386,21 +1203,15 @@ function EditorPage() {
                     onClick={() => handleSeek(selectedClip.start + frame.time)}
                     className={cn(
                       "aspect-video bg-studio-surface rounded-lg overflow-hidden border-2 transition-all hover:scale-105 relative",
-                      Math.abs(currentTime - (selectedClip.start + frame.time)) < 0.5
-                        ? "border-orange-500 ring-2 ring-orange-500/50"
-                        : "border-studio-border"
+                      Math.abs(currentTime - (selectedClip.start + frame.time)) < 0.5 ? "border-orange-500 ring-2 ring-orange-500/50" : "border-studio-border"
                     )}
                   >
                     {frame.thumbnail ? (
                       <img src={frame.thumbnail} alt={`Frame at ${formatTime(frame.time)}`} className="w-full h-full object-cover" />
                     ) : (
-                      <div className="w-full h-full grid place-items-center text-studio-muted">
-                        <Film className="size-6" />
-                      </div>
+                      <div className="w-full h-full grid place-items-center text-studio-muted"><Film className="size-6" /></div>
                     )}
-                    <div className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center py-0.5">
-                      {formatTime(frame.time)}
-                    </div>
+                    <div className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center py-0.5">{formatTime(frame.time)}</div>
                   </button>
                 ))}
               </div>
@@ -1420,15 +1231,7 @@ function EditorPage() {
         open={exportOpen}
         onOpenChange={setExportOpen}
         projectTitle={title}
-        clips={clips
-          .filter((c) => !!c.url)
-          .map((c) => ({
-            id: c.id,
-            url: c.vfxUrl || c.url!,
-            name: c.name,
-            start: c.start,
-            duration: c.duration,
-          }))}
+        clips={clips.filter((c) => !!c.url).map((c) => ({ id: c.id, url: c.vfxUrl || c.url!, name: c.name, start: c.start, duration: c.duration }))}
         overlays={overlays}
         adjustments={adj}
       />
@@ -1448,9 +1251,9 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
   );
 }
 
-function TimelineRow({ label, children, height = "h-12", labelColor }: { label: string; children: React.ReactNode; height?: string; labelColor?: string }) {
+function TimelineRow({ label, children, height = "h-12", labelColor, bgColor }: { label: string; children: React.ReactNode; height?: string; labelColor?: string; bgColor?: string }) {
   return (
-    <div className={cn("flex items-stretch gap-0", height)}>
+    <div className={cn("flex items-stretch gap-0", height, bgColor)}>
       <div className={cn("w-20 h-full flex items-center justify-center border-r border-studio-border bg-studio-surface shrink-0 text-[10px] font-medium", labelColor || "text-studio-muted")}>
         {label}
       </div>
@@ -1459,29 +1262,12 @@ function TimelineRow({ label, children, height = "h-12", labelColor }: { label: 
   );
 }
 
-function AdjustSlider({
-  label,
-  value,
-  min,
-  max,
-  onChange,
-  suffix = "",
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (v: number) => void;
-  suffix?: string;
-}) {
+function AdjustSlider({ label, value, min, max, onChange, suffix = "" }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void; suffix?: string }) {
   return (
     <div className="space-y-1.5">
       <div className="flex justify-between text-xs">
         <span className="text-studio-muted">{label}</span>
-        <span className="font-medium">
-          {value}
-          {suffix}
-        </span>
+        <span className="font-medium">{value}{suffix}</span>
       </div>
       <Slider value={[value]} min={min} max={max} step={1} onValueChange={(v) => onChange(v[0])} />
     </div>
@@ -1496,61 +1282,23 @@ function formatTime(sec: number) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
 }
 
-function ClipVideoPlayer({
-  clip,
-  currentTime,
-  playing,
-  muted,
-  filterStyle,
-}: {
-  clip: Clip;
-  currentTime: number;
-  playing: boolean;
-  muted: boolean;
-  filterStyle: string;
-}) {
+function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle }: { clip: Clip; currentTime: number; playing: boolean; muted: boolean; filterStyle: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const src = clip.vfxUrl || clip.url || "";
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (el.src !== src) el.src = src;
-  }, [src]);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.playbackRate = clip.playbackRate || 1;
-  }, [clip.playbackRate]);
-
+  useEffect(() => { const el = ref.current; if (!el) return; if (el.src !== src) el.src = src; }, [src]);
+  useEffect(() => { const el = ref.current; if (!el) return; el.playbackRate = clip.playbackRate || 1; }, [clip.playbackRate]);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const localTime = Math.max(0, currentTime - clip.start);
-    if (Math.abs(el.currentTime - localTime) > 0.25) {
-      try { el.currentTime = localTime; } catch {}
-    }
+    if (Math.abs(el.currentTime - localTime) > 0.25) { try { el.currentTime = localTime; } catch {} }
   }, [currentTime, clip.start]);
-
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (playing) {
-      el.play().catch(() => {});
-    } else {
-      el.pause();
-    }
+    if (playing) { el.play().catch(() => {}); } else { el.pause(); }
   }, [playing, src]);
 
-  return (
-    <video
-      ref={ref}
-      muted={muted}
-      playsInline
-      preload="auto"
-      className="w-full h-full object-contain"
-      style={{ filter: filterStyle }}
-    />
-  );
+  return <video ref={ref} muted={muted} playsInline preload="auto" className="w-full h-full object-contain" style={{ filter: filterStyle }} />;
 }
