@@ -1002,22 +1002,14 @@ function EditorPage() {
                   className={cn("absolute inset-0", idx > 0 && "pointer-events-none")}
                   style={{ zIndex: activeClips.length - idx }}
                 >
-                  <video
-                    src={clip.vfxUrl || clip.url}
-                    muted
-                    playsInline
-                    className="w-full h-full object-contain"
-                    style={{ filter: filterStyle }}
-                    ref={(el) => {
-                      if (el && playing) {
-                        const localTime = currentTime - clip.start;
-                        if (Math.abs(el.currentTime - localTime) > 0.3) {
-                          el.currentTime = localTime;
-                        }
-                        el.playbackRate = clip.playbackRate || 1;
-                        el.play().catch(() => {});
-                      }
-                    }}
+                  <ClipVideoPlayer
+                    clip={clip}
+                    currentTime={currentTime}
+                    playing={playing}
+                    // Mute secondary overlapping clips to prevent double-audio,
+                    // and respect the per-clip "Mute original audio" toggle.
+                    muted={idx > 0 || !!clip.muteOriginal}
+                    filterStyle={filterStyle}
                   />
                   {activePreset && activePreset.overlay !== "none" && (
                     <VfxOverlay
