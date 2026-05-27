@@ -1108,6 +1108,15 @@ function EditorPage() {
                   onChange={(v) => updateClip({ playbackRate: v / 100 })}
                   suffix="%"
                 />
+                {selectedClip.kind === "video" && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs">Mute original audio</span>
+                    <Switch
+                      checked={!!selectedClip.muteOriginal}
+                      onCheckedChange={(v) => updateClip({ muteOriginal: v })}
+                    />
+                  </div>
+                )}
                 {selectedClip.vfxPresetApplied && (
                   <div className="p-2 bg-orange-500/10 rounded-lg border border-orange-500/30">
                     <div className="text-xs font-medium text-orange-400">VFX: {selectedClip.vfxPresetApplied}</div>
