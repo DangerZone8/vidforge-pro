@@ -51,6 +51,8 @@ type Clip = {
   vfxPresetId?: string | null;
   // Storyboard frames
   storyboardFrames?: { time: number; thumbnail?: string }[];
+  // Mute the original video's audio track (song on A1 still plays)
+  muteOriginal?: boolean;
 };
 
 type AudioClip = {
