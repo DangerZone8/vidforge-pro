@@ -311,8 +311,13 @@ function EditorPage() {
 
     video.onloadedmetadata = () => {
       const frames: { time: number; thumbnail?: string }[] = [];
-      const numFrames = Math.max(12, Math.floor(video.duration / 2));
-      const interval = video.duration / numFrames;
+      const dur = video.duration;
+      if (!Number.isFinite(dur) || dur <= 0) {
+        // Some webm/mp4 files report Infinity duration — skip storyboard generation.
+        return;
+      }
+      const numFrames = Math.max(12, Math.floor(dur / 2));
+      const interval = dur / numFrames;
       const canvas = document.createElement("canvas");
       canvas.width = 160;
       canvas.height = 90;
@@ -325,7 +330,9 @@ function EditorPage() {
           setClips((all) => all.map((c) => c.id === clip.id ? { ...c, storyboardFrames: frames } : c));
           return;
         }
-        video.currentTime = currentFrame * interval;
+        const t = currentFrame * interval;
+        if (!Number.isFinite(t)) return;
+        try { video.currentTime = t; } catch {}
       };
 
       video.onseeked = () => {
