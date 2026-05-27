@@ -6,6 +6,7 @@ interface AuthContextValue {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  error: string | null;
   signOut: () => Promise<void>;
 }
 
@@ -14,26 +15,73 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
-      setSession(s);
+    // Initialize auth state
+    const initializeAuth = async () => {
+      try {
+        const { data, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        setSession(data.session);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Failed to get session";
+        console.error("[auth] initialization error:", errorMessage);
+        setError(errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, newSession) => {
+        console.log("[auth] state changed:", event);
+        setSession(newSession);
+        setLoading(false);
+        setError(null);
+
+        // Handle auth errors
+        if (event === "SIGNED_IN" && !newSession) {
+          setError("Sign in failed: No session established");
+        } else if (event === "USER_UPDATED" && !newSession) {
+          setError("Session lost. Please sign in again.");
+        }
+      }
+    );
+
+    // Run initialization
+    initializeAuth();
+
+    // Safety net: never let the app stay stuck on the loading screen
+    const safety = setTimeout(() => {
       setLoading(false);
-    });
-    supabase.auth.getSession()
-      .then(({ data }) => { setSession(data.session); })
-      .catch((err) => { console.error("[auth] getSession failed", err); })
-      .finally(() => { setLoading(false); });
-    // Safety net: never let the app stay stuck on the loading screen.
-    const safety = setTimeout(() => setLoading(false), 4000);
-    return () => { subscription.unsubscribe(); clearTimeout(safety); };
+    }, 5000);
+
+    return () => {
+      subscription?.unsubscribe();
+      clearTimeout(safety);
+    };
   }, []);
 
   const value: AuthContextValue = {
     user: session?.user ?? null,
     session,
     loading,
-    signOut: async () => { await supabase.auth.signOut(); },
+    error,
+    signOut: async () => {
+      try {
+        const { error } = await supabase.auth.signOut();
+        if (error) throw error;
+        setSession(null);
+        setError(null);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Sign out failed";
+        console.error("[auth] signOut error:", errorMessage);
+        setError(errorMessage);
+        throw err;
+      }
+    },
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
