@@ -52,18 +52,12 @@ function LoginPage() {
     setBusy(true);
     try {
       if (mode === "signup") {
-        // Check if email already exists
-        const { data: existingUser } = await supabase.auth.admin?.listUsers() ?? { data: null };
-        if (existingUser?.users?.some(u => u.email === email)) {
-          toast.error("Email already registered. Please sign in instead.");
-          setBusy(false);
-          return;
-        }
-
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin },
+          options: { 
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+          },
         });
         if (error) throw error;
         toast.success("Account created! Check your email to confirm your account.");
@@ -95,16 +89,36 @@ function LoginPage() {
   async function handleGoogle() {
     setBusy(true);
     try {
+      console.log("[google] Starting Google OAuth flow...");
+      
       const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: window.location.origin,
+        redirect_uri: `${window.location.origin}/auth/callback`,
       });
-      if (result.error) {
-        toast.error(result.error.message || "Google sign-in failed");
-        setBusy(false);
+
+      console.log("[google] OAuth result:", result);
+
+      if (result.redirected) {
+        console.log("[google] Redirecting to OAuth provider...");
+        // The library handles the redirect automatically
+        return;
       }
+
+      if (result.error) {
+        const errorMsg = result.error instanceof Error ? result.error.message : String(result.error);
+        console.error("[google] OAuth error:", errorMsg);
+        toast.error(`Google sign-in failed: ${errorMsg}`);
+        setBusy(false);
+        return;
+      }
+
+      // If we get here, OAuth was successful
+      console.log("[google] OAuth successful");
+      toast.success("Google sign-in successful!");
+      // Navigation happens automatically via useEffect when user is set
     } catch (err) {
-      toast.error("Google sign-in error. Please try again.");
-      console.error("[google auth] error:", err);
+      const errorMessage = err instanceof Error ? err.message : "Google sign-in error";
+      console.error("[google] unexpected error:", errorMessage);
+      toast.error(`Google sign-in error: ${errorMessage}`);
       setBusy(false);
     }
   }
@@ -142,6 +156,7 @@ function LoginPage() {
           </div>
 
           <Button variant="outline" onClick={handleGoogle} disabled={busy} className="w-full h-10">
+            {busy && <Loader2 className="size-4 animate-spin mr-2" />}
             <GoogleIcon className="size-4" /> Continue with Google
           </Button>
 
@@ -164,6 +179,7 @@ function LoginPage() {
                 }} 
                 placeholder="you@studio.com"
                 className={emailError ? "border-red-500" : ""}
+                disabled={busy}
               />
               {emailError && <p className="text-xs text-red-500">{emailError}</p>}
             </div>
@@ -176,7 +192,8 @@ function LoginPage() {
                 minLength={6} 
                 value={password} 
                 onChange={(e) => setPassword(e.target.value)} 
-                placeholder="••••••••" 
+                placeholder="••••••••"
+                disabled={busy}
               />
               {mode === "signup" && <p className="text-xs text-muted-foreground">Minimum 6 characters</p>}
             </div>
@@ -188,7 +205,11 @@ function LoginPage() {
 
           <p className="text-center text-sm text-muted-foreground">
             {mode === "signin" ? "New to CreatorCut?" : "Already have an account?"}{" "}
-            <button onClick={() => setMode(mode === "signin" ? "signup" : "signin")} className="text-foreground hover:text-studio-accent underline-offset-4 hover:underline">
+            <button 
+              onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+              disabled={busy}
+              className="text-foreground hover:text-studio-accent underline-offset-4 hover:underline disabled:opacity-50"
+            >
               {mode === "signin" ? "Create an account" : "Sign in"}
             </button>
           </p>
