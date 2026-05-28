@@ -92,7 +92,7 @@ function LoginPage() {
       console.log("[google] Starting Google OAuth flow...");
       
       const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: `${window.location.origin}/auth/callback`,
+        redirect_uri: window.location.origin,
       });
 
       console.log("[google] OAuth result:", result);
