@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { AppSidebar } from "@/components/app-sidebar";
 
@@ -11,11 +11,13 @@ function AppLayout() {
   const { user, loading, refreshAuth } = useAuth();
   const navigate = useNavigate();
   const [checkingSession, setCheckingSession] = useState(false);
+  const verificationInFlight = useRef(false);
 
   useEffect(() => {
-    if (loading || user || checkingSession) return;
+    if (loading || user || verificationInFlight.current) return;
 
     let cancelled = false;
+    verificationInFlight.current = true;
     setCheckingSession(true);
 
     async function verifyBeforeRedirect() {
@@ -27,6 +29,7 @@ function AppLayout() {
       }
 
       if (cancelled) return;
+      verificationInFlight.current = false;
       setCheckingSession(false);
 
       if (!restoredSession) {
@@ -38,10 +41,11 @@ function AppLayout() {
 
     return () => {
       cancelled = true;
+      verificationInFlight.current = false;
     };
-  }, [checkingSession, loading, navigate, refreshAuth, user]);
+  }, [loading, navigate, refreshAuth, user]);
 
-  if (loading || checkingSession || !user) {
+  if (loading || (!user && checkingSession) || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="size-8 rounded-lg bg-studio-accent animate-pulse" />
