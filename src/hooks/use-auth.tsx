@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -7,6 +7,7 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   error: string | null;
+  refreshAuth: () => Promise<Session | null>;
   signOut: () => Promise<void>;
 }
 
@@ -17,22 +18,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Initialize auth state
-    const initializeAuth = async () => {
-      try {
-        const { data, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError) throw sessionError;
-        setSession(data.session);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to get session";
-        console.error("[auth] initialization error:", errorMessage);
-        setError(errorMessage);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const refreshAuth = useCallback(async () => {
+    try {
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      setSession(data.session ?? null);
+      setError(null);
+      return data.session ?? null;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to get session";
+      console.error("[auth] refresh error:", errorMessage);
+      setSession(null);
+      setError(errorMessage);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
+  useEffect(() => {
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, newSession) => {
@@ -51,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     // Run initialization
-    initializeAuth();
+    refreshAuth();
 
     // Safety net: never let the app stay stuck on the loading screen
     const safety = setTimeout(() => {
@@ -62,13 +66,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription?.unsubscribe();
       clearTimeout(safety);
     };
-  }, []);
+  }, [refreshAuth]);
 
   const value: AuthContextValue = {
     user: session?.user ?? null,
     session,
     loading,
     error,
+    refreshAuth,
     signOut: async () => {
       try {
         const { error } = await supabase.auth.signOut();
