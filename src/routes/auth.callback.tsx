@@ -59,8 +59,6 @@ function AuthCallback() {
         if (cancelled) return;
 
         if (session) {
-          // Clean the URL so tokens/codes don't linger in history.
-          window.history.replaceState({}, "", "/dashboard");
           navigate({ to: "/dashboard", replace: true });
         } else {
           navigate({ to: "/login", replace: true });
