@@ -45,7 +45,7 @@ function AppLayout() {
     };
   }, [loading, navigate, refreshAuth, user]);
 
-  if (loading || (!user && checkingSession) || !user) {
+  if (loading || checkingSession || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="size-8 rounded-lg bg-studio-accent animate-pulse" />
