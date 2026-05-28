@@ -1,7 +1,6 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable/index";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,7 +62,7 @@ function LoginPage() {
         if (data.session) {
           toast.success("Welcome back!");
         } else {
-          toast.error("Sign in successful but session not established. Please try again.");
+          toast.error("Session not established. Please try again.");
         }
       }
     } catch (err) {
@@ -77,34 +76,7 @@ function LoginPage() {
   async function handleGoogle() {
     setBusy(true);
     try {
-      // Try Lovable Cloud OAuth first (works on deployed Lovable apps)
-      const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: `${window.location.origin}/auth/callback`,
-      });
-
-      if (result.redirected) {
-        // Browser is redirecting to Google — nothing else to do
-        return;
-      }
-
-      if (result.error) {
-        // Lovable Cloud OAuth failed — fall back to Supabase direct OAuth
-        console.warn("[google] Lovable OAuth failed, falling back to Supabase OAuth:", result.error);
-        await supabaseOAuthFallback();
-        return;
-      }
-
-      // Lovable returned tokens directly (no redirect needed)
-      toast.success("Google sign-in successful!");
-    } catch (err) {
-      // Fallback to Supabase direct OAuth
-      console.warn("[google] Lovable OAuth threw, falling back to Supabase OAuth:", err);
-      await supabaseOAuthFallback();
-    }
-  }
-
-  async function supabaseOAuthFallback() {
-    try {
+      // Use Supabase OAuth directly — reliable and works everywhere
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
@@ -112,7 +84,7 @@ function LoginPage() {
         },
       });
       if (error) throw error;
-      // Browser redirects to Google automatically
+      // Browser redirects to Google automatically — nothing else to do here
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Google sign-in error";
       toast.error(`Google sign-in error: ${errorMessage}`);

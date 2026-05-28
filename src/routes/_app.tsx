@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { AppSidebar } from "@/components/app-sidebar";
 
 export const Route = createFileRoute("/_app")({
   component: AppLayout,
@@ -58,7 +59,10 @@ function AppLayout() {
 
   return (
     <div className="min-h-screen flex bg-studio-bg text-foreground">
-      <Outlet />
+      <AppSidebar />
+      <div className="flex-1 pl-16 min-w-0">
+        <Outlet />
+      </div>
     </div>
   );
 }

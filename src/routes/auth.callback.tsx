@@ -23,18 +23,21 @@ function AuthCallback() {
         const code = url.searchParams.get("code");
         const accessToken = url.searchParams.get("access_token") || hashParams.get("access_token");
         const refreshToken = url.searchParams.get("refresh_token") || hashParams.get("refresh_token");
-        const errorParam = url.searchParams.get("error_description") || hashParams.get("error_description") || url.searchParams.get("error");
+        const errorParam =
+          url.searchParams.get("error_description") ||
+          hashParams.get("error_description") ||
+          url.searchParams.get("error");
 
         if (errorParam) {
           throw new Error(decodeURIComponent(errorParam));
         }
 
-        // 1. PKCE code exchange (Supabase default for OAuth)
+        // PKCE code exchange (Supabase default OAuth flow)
         if (code) {
           const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
           if (error) throw error;
         }
-        // 2. Explicit token set (implicit flow or Lovable Cloud tokens)
+        // Explicit tokens (implicit flow or Lovable Cloud tokens in URL)
         else if (accessToken && refreshToken) {
           const { error } = await supabase.auth.setSession({
             access_token: accessToken,
@@ -42,27 +45,24 @@ function AuthCallback() {
           });
           if (error) throw error;
         }
-        // 3. Hash fragment tokens — supabase-js auto-detects with detectSessionInUrl: true
-        // We just need to wait for the session to be established
+        // Otherwise supabase-js auto-detects hash fragment tokens
+        // (detectSessionInUrl: true handles this)
 
-        // Wait for session to be available (with retries)
+        // Wait for session to be established
         let session = null;
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 15; i++) {
           const { data } = await supabase.auth.getSession();
           session = data.session;
           if (session) break;
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 300));
         }
 
         if (session) {
-          // Clear the URL hash/params to avoid re-processing on refresh
-          if (window.location.hash || window.location.search) {
-            window.history.replaceState(null, "", "/dashboard");
-          }
+          // Clean URL to avoid re-processing on browser back/refresh
+          window.history.replaceState(null, "", "/dashboard");
           navigate({ to: "/dashboard", replace: true });
         } else {
-          console.error("[auth-callback] No session established after OAuth");
-          toast.error("Sign-in failed: Could not establish session");
+          toast.error("Sign-in failed: Could not establish session. Please try again.");
           navigate({ to: "/login", replace: true });
         }
       } catch (err) {
