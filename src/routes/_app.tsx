@@ -1,7 +1,6 @@
 import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { AppSidebar } from "@/components/app-sidebar";
 
 export const Route = createFileRoute("/_app")({
   component: AppLayout,
@@ -10,27 +9,32 @@ export const Route = createFileRoute("/_app")({
 function AppLayout() {
   const { user, loading, refreshAuth } = useAuth();
   const navigate = useNavigate();
-  const [checkingSession, setCheckingSession] = useState(false);
-  const verificationInFlight = useRef(false);
+  const redirectAttempted = useRef(false);
 
   useEffect(() => {
-    if (loading || user || verificationInFlight.current) return;
+    // Wait until auth is done loading before deciding whether to redirect
+    if (loading) return;
+    if (user) return;
+    if (redirectAttempted.current) return;
+
+    // If we're on an auth callback route, don't redirect — let the callback handle it
+    const path = window.location.pathname;
+    if (path === "/auth/callback") return;
+
+    redirectAttempted.current = true;
 
     let cancelled = false;
-    verificationInFlight.current = true;
-    setCheckingSession(true);
 
     async function verifyBeforeRedirect() {
+      // Give the session a few attempts to establish (covers OAuth callback race)
       let restoredSession = await refreshAuth();
 
-      for (let i = 0; !restoredSession && i < 4; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 150));
+      for (let i = 0; !restoredSession && i < 6; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
         restoredSession = await refreshAuth();
       }
 
       if (cancelled) return;
-      verificationInFlight.current = false;
-      setCheckingSession(false);
 
       if (!restoredSession) {
         navigate({ to: "/login", replace: true });
@@ -41,11 +45,10 @@ function AppLayout() {
 
     return () => {
       cancelled = true;
-      verificationInFlight.current = false;
     };
   }, [loading, navigate, refreshAuth, user]);
 
-  if (loading || checkingSession || !user) {
+  if (loading || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="size-8 rounded-lg bg-studio-accent animate-pulse" />
@@ -55,10 +58,7 @@ function AppLayout() {
 
   return (
     <div className="min-h-screen flex bg-studio-bg text-foreground">
-      <AppSidebar />
-      <div className="flex-1 pl-16 min-w-0">
-        <Outlet />
-      </div>
+      <Outlet />
     </div>
   );
 }

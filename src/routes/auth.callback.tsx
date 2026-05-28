@@ -1,7 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/auth/callback")({
@@ -11,71 +10,71 @@ export const Route = createFileRoute("/auth/callback")({
 
 function AuthCallback() {
   const navigate = useNavigate();
-  const { refreshAuth } = useAuth();
+  const processed = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
+    if (processed.current) return;
+    processed.current = true;
 
     async function handle() {
       try {
-        // Handle PKCE / authorization code flow (?code=...)
         const url = new URL(window.location.href);
         const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
         const code = url.searchParams.get("code");
         const accessToken = url.searchParams.get("access_token") || hashParams.get("access_token");
         const refreshToken = url.searchParams.get("refresh_token") || hashParams.get("refresh_token");
-        const errorDescription =
-          url.searchParams.get("error_description") ||
-          hashParams.get("error_description") ||
-          url.searchParams.get("error");
+        const errorParam = url.searchParams.get("error_description") || hashParams.get("error_description") || url.searchParams.get("error");
 
-        if (errorDescription) {
-          throw new Error(errorDescription);
+        if (errorParam) {
+          throw new Error(decodeURIComponent(errorParam));
         }
 
-        if (accessToken && refreshToken) {
+        // 1. PKCE code exchange (Supabase default for OAuth)
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+          if (error) throw error;
+        }
+        // 2. Explicit token set (implicit flow or Lovable Cloud tokens)
+        else if (accessToken && refreshToken) {
           const { error } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
           });
           if (error) throw error;
-        } else if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(
-            window.location.href
-          );
-          if (error) throw error;
         }
+        // 3. Hash fragment tokens — supabase-js auto-detects with detectSessionInUrl: true
+        // We just need to wait for the session to be established
 
-        // Implicit flow tokens land in the hash (#access_token=...).
-        // supabase-js auto-detects and persists those on load, so we just
-        // wait for the session to be available.
-        let session = await refreshAuth();
-
-        for (let i = 0; !session && i < 5; i += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 150));
-          session = await refreshAuth();
+        // Wait for session to be available (with retries)
+        let session = null;
+        for (let i = 0; i < 10; i++) {
+          const { data } = await supabase.auth.getSession();
+          session = data.session;
+          if (session) break;
+          await new Promise((r) => setTimeout(r, 200));
         }
-
-        if (cancelled) return;
 
         if (session) {
+          // Clear the URL hash/params to avoid re-processing on refresh
+          if (window.location.hash || window.location.search) {
+            window.history.replaceState(null, "", "/dashboard");
+          }
           navigate({ to: "/dashboard", replace: true });
         } else {
+          console.error("[auth-callback] No session established after OAuth");
+          toast.error("Sign-in failed: Could not establish session");
           navigate({ to: "/login", replace: true });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Sign-in failed";
         console.error("[auth-callback] error:", msg);
         toast.error(`Sign-in failed: ${msg}`);
-        if (!cancelled) navigate({ to: "/login", replace: true });
+        navigate({ to: "/login", replace: true });
       }
     }
 
     handle();
-    return () => {
-      cancelled = true;
-    };
-  }, [navigate, refreshAuth]);
+  }, [navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-studio-bg text-foreground">

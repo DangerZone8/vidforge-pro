@@ -37,24 +37,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // Listen for auth state changes
+    // Listen for auth state changes — the callback runs synchronously,
+    // so we avoid async operations inside it to prevent deadlocks.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, newSession) => {
-        console.log("[auth] state changed:", event);
+        console.log("[auth] state changed:", event, newSession ? "has session" : "no session");
         setSession(newSession);
         setLoading(false);
         setError(null);
 
-        // Handle auth errors
         if (event === "SIGNED_IN" && !newSession) {
           setError("Sign in failed: No session established");
-        } else if (event === "USER_UPDATED" && !newSession) {
+        } else if (event === "TOKEN_REFRESHED" && !newSession) {
           setError("Session lost. Please sign in again.");
         }
       }
     );
 
-    // Run initialization
+    // Initialize by checking existing session
     refreshAuth();
 
     // Safety net: never let the app stay stuck on the loading screen

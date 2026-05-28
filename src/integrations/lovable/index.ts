@@ -13,9 +13,11 @@ export const lovable = {
   auth: {
     signInWithOAuth: async (provider: "google" | "apple" | "microsoft" | "lovable", opts?: SignInOptions) => {
       const result = await lovableAuth.signInWithOAuth(provider, {
-        redirect_uri: opts?.redirect_uri,
+        redirect_uri: opts?.redirect_uri || `${window.location.origin}/auth/callback`,
         extraParams: {
           ...opts?.extraParams,
+          access_type: "offline",
+          prompt: "consent",
         },
       });
 
@@ -28,7 +30,9 @@ export const lovable = {
       }
 
       try {
-        await supabase.auth.setSession(result.tokens);
+        if (result.tokens) {
+          await supabase.auth.setSession(result.tokens);
+        }
       } catch (e) {
         return { error: e instanceof Error ? e : new Error(String(e)) };
       }

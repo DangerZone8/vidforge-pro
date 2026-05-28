@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader as Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,
@@ -27,23 +27,18 @@ function LoginPage() {
     if (!loading && user) navigate({ to: "/dashboard" });
   }, [loading, user, navigate]);
 
-  // Validate email format
   function validateEmail(email: string): boolean {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setEmailError("");
-    
-    // Validate email before submission
+
     if (!validateEmail(email)) {
       setEmailError("Please enter a valid email address");
       return;
     }
-
-    // Validate password length
     if (password.length < 6) {
       toast.error("Password must be at least 6 characters");
       return;
@@ -55,24 +50,18 @@ function LoginPage() {
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { 
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
-          },
+          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
         });
         if (error) throw error;
         toast.success("Account created! Check your email to confirm your account.");
-        // Reset form after successful signup
         setEmail("");
         setPassword("");
         setMode("signin");
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        
-        // Verify session was created
         if (data.session) {
           toast.success("Welcome back!");
-          // Navigation happens automatically via useEffect when user is set
         } else {
           toast.error("Sign in successful but session not established. Please try again.");
         }
@@ -80,7 +69,6 @@ function LoginPage() {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Authentication failed";
       toast.error(errorMessage);
-      console.error("[auth] error:", err);
     } finally {
       setBusy(false);
     }
@@ -89,35 +77,44 @@ function LoginPage() {
   async function handleGoogle() {
     setBusy(true);
     try {
-      console.log("[google] Starting Google OAuth flow...");
-      
+      // Try Lovable Cloud OAuth first (works on deployed Lovable apps)
       const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: window.location.origin,
+        redirect_uri: `${window.location.origin}/auth/callback`,
       });
 
-      console.log("[google] OAuth result:", result);
-
       if (result.redirected) {
-        console.log("[google] Redirecting to OAuth provider...");
-        // The library handles the redirect automatically
+        // Browser is redirecting to Google — nothing else to do
         return;
       }
 
       if (result.error) {
-        const errorMsg = result.error instanceof Error ? result.error.message : String(result.error);
-        console.error("[google] OAuth error:", errorMsg);
-        toast.error(`Google sign-in failed: ${errorMsg}`);
-        setBusy(false);
+        // Lovable Cloud OAuth failed — fall back to Supabase direct OAuth
+        console.warn("[google] Lovable OAuth failed, falling back to Supabase OAuth:", result.error);
+        await supabaseOAuthFallback();
         return;
       }
 
-      // If we get here, OAuth was successful
-      console.log("[google] OAuth successful");
+      // Lovable returned tokens directly (no redirect needed)
       toast.success("Google sign-in successful!");
-      // Navigation happens automatically via useEffect when user is set
+    } catch (err) {
+      // Fallback to Supabase direct OAuth
+      console.warn("[google] Lovable OAuth threw, falling back to Supabase OAuth:", err);
+      await supabaseOAuthFallback();
+    }
+  }
+
+  async function supabaseOAuthFallback() {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) throw error;
+      // Browser redirects to Google automatically
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Google sign-in error";
-      console.error("[google] unexpected error:", errorMessage);
       toast.error(`Google sign-in error: ${errorMessage}`);
       setBusy(false);
     }
@@ -140,7 +137,7 @@ function LoginPage() {
               A modern studio for creators. Capture webcam and screen, edit on a real timeline, and export to MP4.
             </p>
           </div>
-          <div className="text-xs text-muted-foreground">© CreatorCut Studio</div>
+          <div className="text-xs text-muted-foreground">&copy; CreatorCut Studio</div>
         </div>
       </div>
 
@@ -168,15 +165,12 @@ function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input 
-                id="email" 
-                type="email" 
-                required 
-                value={email} 
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  setEmailError("");
-                }} 
+              <Input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); setEmailError(""); }}
                 placeholder="you@studio.com"
                 className={emailError ? "border-red-500" : ""}
                 disabled={busy}
@@ -185,13 +179,13 @@ function LoginPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <Input 
-                id="password" 
-                type="password" 
-                required 
-                minLength={6} 
-                value={password} 
-                onChange={(e) => setPassword(e.target.value)} 
+              <Input
+                id="password"
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 disabled={busy}
               />
@@ -205,7 +199,7 @@ function LoginPage() {
 
           <p className="text-center text-sm text-muted-foreground">
             {mode === "signin" ? "New to CreatorCut?" : "Already have an account?"}{" "}
-            <button 
+            <button
               onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
               disabled={busy}
               className="text-foreground hover:text-studio-accent underline-offset-4 hover:underline disabled:opacity-50"
