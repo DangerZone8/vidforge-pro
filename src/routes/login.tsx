@@ -49,7 +49,7 @@ function LoginPage() {
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
         });
         if (error) throw error;
         toast.success("Account created! Check your email to confirm your account.");
@@ -69,25 +69,6 @@ function LoginPage() {
       const errorMessage = err instanceof Error ? err.message : "Authentication failed";
       toast.error(errorMessage);
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleGoogle() {
-    setBusy(true);
-    try {
-      // Use Supabase OAuth directly — reliable and works everywhere
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-      if (error) throw error;
-      // Browser redirects to Google automatically — nothing else to do here
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Google sign-in error";
-      toast.error(`Google sign-in error: ${errorMessage}`);
       setBusy(false);
     }
   }
@@ -122,16 +103,6 @@ function LoginPage() {
             <p className="text-sm text-muted-foreground">
               {mode === "signin" ? "Sign in to continue to your studio." : "Start your free creator account."}
             </p>
-          </div>
-
-          <Button variant="outline" onClick={handleGoogle} disabled={busy} className="w-full h-10">
-            {busy && <Loader2 className="size-4 animate-spin mr-2" />}
-            <GoogleIcon className="size-4" /> Continue with Google
-          </Button>
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-studio-border" /></div>
-            <div className="relative flex justify-center"><span className="bg-studio-bg px-2 text-[11px] uppercase tracking-widest text-muted-foreground">or email</span></div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -182,13 +153,5 @@ function LoginPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function GoogleIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.24 1.4-1.66 4.1-5.5 4.1-3.3 0-6-2.74-6-6.1s2.7-6.1 6-6.1c1.88 0 3.14.8 3.86 1.5l2.64-2.54C16.93 3.42 14.7 2.4 12 2.4 6.7 2.4 2.4 6.7 2.4 12s4.3 9.6 9.6 9.6c5.5 0 9.1-3.85 9.1-9.3 0-.6-.05-1.08-.15-1.55H12" />
-    </svg>
   );
 }

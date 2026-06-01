@@ -18,9 +18,7 @@ function AppLayout() {
     if (user) return;
     if (redirectAttempted.current) return;
 
-    // If we're on an auth callback route, don't redirect — let the callback handle it
-    const path = window.location.pathname;
-    if (path === "/auth/callback") return;
+    // (Google OAuth removed — email/password only)
 
     redirectAttempted.current = true;
 
