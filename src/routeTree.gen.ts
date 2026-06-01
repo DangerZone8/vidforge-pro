@@ -12,9 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiPublicAudioProxyRouteImport } from './routes/api/public/audio-proxy'
 import { Route as AppRecordRouteImport } from './routes/_app/record'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
+import { Route as ApiPublicAudioProxyRouteImport } from './routes/api/public/audio-proxy'
 import { Route as AppEditorProjectIdRouteImport } from './routes/_app/editor.$projectId'
 
 const LoginRoute = LoginRouteImport.update({
@@ -31,11 +31,6 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPublicAudioProxyRoute = ApiPublicAudioProxyRouteImport.update({
-  id: '/api/public/audio-proxy',
-  path: '/api/public/audio-proxy',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AppRecordRoute = AppRecordRouteImport.update({
   id: '/record',
   path: '/record',
@@ -45,6 +40,11 @@ const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => AppRoute,
+} as any)
+const ApiPublicAudioProxyRoute = ApiPublicAudioProxyRouteImport.update({
+  id: '/api/public/audio-proxy',
+  path: '/api/public/audio-proxy',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppEditorProjectIdRoute = AppEditorProjectIdRouteImport.update({
   id: '/editor/$projectId',
@@ -57,16 +57,16 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/dashboard': typeof AppDashboardRoute
   '/record': typeof AppRecordRoute
-  '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
   '/editor/$projectId': typeof AppEditorProjectIdRoute
+  '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AppDashboardRoute
   '/record': typeof AppRecordRoute
-  '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
   '/editor/$projectId': typeof AppEditorProjectIdRoute
+  '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -75,8 +75,8 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/record': typeof AppRecordRoute
-  '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
   '/_app/editor/$projectId': typeof AppEditorProjectIdRoute
+  '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -85,16 +85,16 @@ export interface FileRouteTypes {
     | '/login'
     | '/dashboard'
     | '/record'
-    | '/api/public/audio-proxy'
     | '/editor/$projectId'
+    | '/api/public/audio-proxy'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/login'
     | '/dashboard'
     | '/record'
-    | '/api/public/audio-proxy'
     | '/editor/$projectId'
+    | '/api/public/audio-proxy'
   id:
     | '__root__'
     | '/'
@@ -102,8 +102,8 @@ export interface FileRouteTypes {
     | '/login'
     | '/_app/dashboard'
     | '/_app/record'
-    | '/api/public/audio-proxy'
     | '/_app/editor/$projectId'
+    | '/api/public/audio-proxy'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -136,13 +136,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/public/audio-proxy': {
-      id: '/api/public/audio-proxy'
-      path: '/api/public/audio-proxy'
-      fullPath: '/api/public/audio-proxy'
-      preLoaderRoute: typeof ApiPublicAudioProxyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_app/record': {
       id: '/_app/record'
       path: '/record'
@@ -156,6 +149,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/dashboard'
       preLoaderRoute: typeof AppDashboardRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/api/public/audio-proxy': {
+      id: '/api/public/audio-proxy'
+      path: '/api/public/audio-proxy'
+      fullPath: '/api/public/audio-proxy'
+      preLoaderRoute: typeof ApiPublicAudioProxyRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/editor/$projectId': {
       id: '/_app/editor/$projectId'
@@ -190,13 +190,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
