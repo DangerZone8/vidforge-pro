@@ -522,7 +522,8 @@ function EditorPage() {
     context: AudioContext | null;
     nodes: Map<string, { source: AudioBufferSourceNode; gain: GainNode; started: boolean }>;
     masterGain: GainNode | null;
-  }>({ context: null, nodes: new Map(), masterGain: null });
+    inFlight: Set<string>;
+  }>({ context: null, nodes: new Map(), masterGain: null, inFlight: new Set() });
 
   useEffect(() => {
     return () => {
@@ -541,6 +542,7 @@ function EditorPage() {
     if (!playing) {
       engine.nodes.forEach(({ source }) => { try { source.stop(); } catch {} });
       engine.nodes.clear();
+      engine.inFlight.clear();
       return;
     }
 
@@ -549,6 +551,7 @@ function EditorPage() {
       engine.masterGain = engine.context.createGain();
       engine.masterGain.connect(engine.context.destination);
     }
+    if (engine.context.state === "suspended") engine.context.resume().catch(() => {});
 
     const ctx = engine.context;
 
@@ -561,11 +564,20 @@ function EditorPage() {
         if (node) { try { node.source.stop(); } catch {} engine.nodes.delete(audioClip.id); }
         return;
       }
-      if (engine.nodes.has(audioClip.id)) return;
+      // Guard against duplicate scheduling — `decodeAudio` is async and this
+      // effect re-fires every RAF tick. Without inFlight tracking we'd start
+      // dozens of overlapping sources per clip (audio echo / chorus bug).
+      if (engine.nodes.has(audioClip.id) || engine.inFlight.has(audioClip.id)) return;
+      engine.inFlight.add(audioClip.id);
 
       try {
-        // decodeAudio extracts audio from any source (audio files + video files)
         const buffer = await decodeAudio(audioClip.url);
+        // While we were awaiting, playback may have stopped or seeked away.
+        if (!playing || !audioEngineRef.current.context) { engine.inFlight.delete(audioClip.id); return; }
+        const stillInRange = currentTime >= audioClip.start && currentTime < audioClip.start + audioClip.duration;
+        if (!stillInRange || audioClip.muted) { engine.inFlight.delete(audioClip.id); return; }
+        if (engine.nodes.has(audioClip.id)) { engine.inFlight.delete(audioClip.id); return; }
+
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.playbackRate.value = audioClip.playbackRate || 1;
@@ -592,15 +604,17 @@ function EditorPage() {
 
         source.connect(gain);
         gain.connect(engine.masterGain!);
-        source.start(0, offsetInClip * audioClip.playbackRate);
+        source.start(0, offsetInClip * (audioClip.playbackRate || 1));
         engine.nodes.set(audioClip.id, { source, gain, started: true });
         source.onended = () => { engine.nodes.delete(audioClip.id); };
       } catch (error) {
         console.error("Audio playback error:", error);
+      } finally {
+        engine.inFlight.delete(audioClip.id);
       }
     });
 
-    // Clean up audio clips that have ended or been muted
+    // Clean up audio clips that have ended, been deleted, or muted.
     engine.nodes.forEach((node, id) => {
       const clip = audioClips.find((a) => a.id === id);
       if (!clip || clip.muted || currentTime < clip.start || currentTime >= clip.start + clip.duration) {
