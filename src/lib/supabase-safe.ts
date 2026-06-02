@@ -3,7 +3,7 @@ import type { Database } from "@/integrations/supabase/types";
 
 const FALLBACK_SUPABASE_URL = "https://nwjpaiboqflpsfcuxvuo.supabase.co";
 const FALLBACK_SUPABASE_PUBLISHABLE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJIUzI1NiIsInJlZiI6Im53anBhaWJvcWZscHNmY3V4dnVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDMyNzYsImV4cCI6MjA5NDY3OTI3Nn0.itoQOadS9z-i9Cu9yRc3vO16u1-v624VwbLle-lCjp4";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im53anBhaWJvcWZscHNmY3V4dnVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDMyNzYsImV4cCI6MjA5NDY3OTI3Nn0.itoQOadS9z-i9Cu9yRc3vO16u1-v624VwbLle-lCjp4";
 
 const env = import.meta.env as Record<string, string | undefined>;
 
