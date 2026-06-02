@@ -629,6 +629,7 @@ function EditorPage() {
     setCurrentTime(newTime);
     audioEngineRef.current.nodes.forEach(({ source }) => { try { source.stop(); } catch {} });
     audioEngineRef.current.nodes.clear();
+    audioEngineRef.current.inFlight.clear();
   }, []);
 
   const activePreset = getPreset(activeClip?.vfxPresetId);
