@@ -8,13 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, Video, Headphones } from "lucide-react";
+import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, Video, Headphones, Undo2, Redo2, Brush } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/export-dialog";
 import { Waveform } from "@/components/waveform";
 import { VfxOverlay } from "@/components/vfx-overlay";
 import { AiVfxAssistant } from "@/components/ai-vfx-assistant";
+import { BrushBlurOverlay, DEFAULT_BRUSH_BLUR, type BrushBlurState } from "@/components/brush-blur-overlay";
 import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ } from "@/lib/vfx-presets";
 import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
@@ -49,6 +50,7 @@ type Clip = {
   storyboardFrames?: { time: number; thumbnail?: string }[];
   muteOriginal?: boolean;
   videoTrack: number;
+  brushBlur?: BrushBlurState;
 };
 
 type AudioClip = {
@@ -93,6 +95,43 @@ function EditorPage() {
   const [vfxCategory, setVfxCategory] = useState<VfxCategory>("cinematic");
   const [exportOpen, setExportOpen] = useState(false);
   const [isProcessingVfx, setIsProcessingVfx] = useState(false);
+  const [brushEditing, setBrushEditing] = useState(false);
+  const primaryVideoRef = useRef<HTMLVideoElement | null>(null);
+  const splitClipRef = useRef<(() => void) | null>(null);
+  const deleteClipRef = useRef<(() => void) | null>(null);
+
+  // Undo/redo history (snapshots of clips + audioClips + overlays)
+  type Snapshot = { clips: Clip[]; audioClips: AudioClip[]; overlays: TextOverlay[] };
+  const historyRef = useRef<{ past: Snapshot[]; future: Snapshot[]; suspend: boolean }>({ past: [], future: [], suspend: false });
+  const snapshot = useCallback((): Snapshot => ({ clips, audioClips, overlays }), [clips, audioClips, overlays]);
+  const pushHistory = useCallback(() => {
+    const h = historyRef.current;
+    if (h.suspend) return;
+    h.past.push(snapshot());
+    if (h.past.length > 50) h.past.shift();
+    h.future = [];
+  }, [snapshot]);
+  const applySnapshot = useCallback((s: Snapshot) => {
+    historyRef.current.suspend = true;
+    setClips(s.clips);
+    setAudioClips(s.audioClips);
+    setOverlays(s.overlays);
+    setTimeout(() => { historyRef.current.suspend = false; }, 0);
+  }, []);
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    const prev = h.past.pop();
+    if (!prev) { toast.info("Nothing to undo"); return; }
+    h.future.push(snapshot());
+    applySnapshot(prev);
+  }, [snapshot, applySnapshot]);
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    const next = h.future.pop();
+    if (!next) { toast.info("Nothing to redo"); return; }
+    h.past.push(snapshot());
+    applySnapshot(next);
+  }, [snapshot, applySnapshot]);
 
   // Import mode dialog — ALWAYS shown for video files
   const [importDialog, setImportDialog] = useState<{
@@ -391,6 +430,7 @@ function EditorPage() {
       toast.info("Move playhead inside the clip to split");
       return;
     }
+    pushHistory();
     const originalSplitTime = c.playbackRate ? splitAt * c.playbackRate : splitAt;
     const a: Clip = { ...c, duration: splitAt };
     const b: Clip = {
@@ -401,8 +441,9 @@ function EditorPage() {
       storyboardFrames: c.storyboardFrames?.filter(f => f.time >= originalSplitTime),
     };
     setClips((all) => all.flatMap((x) => (x.id === c.id ? [a, b] : [x])));
-    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}. Use Inspector to convert either part to Audio Only.`);
+    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}`);
   }
+  splitClipRef.current = splitClip;
 
   // Convert selected video clip to audio-only
   function convertToAudioOnly(clipId: string) {
@@ -452,13 +493,16 @@ function EditorPage() {
 
   function deleteClip() {
     if (selectedClipId) {
+      pushHistory();
       setClips((c) => c.filter((x) => x.id !== selectedClipId));
       setSelectedClipId(null);
     } else if (selectedAudioId) {
+      pushHistory();
       setAudioClips((a) => a.filter((x) => x.id !== selectedAudioId));
       setSelectedAudioId(null);
     }
   }
+  deleteClipRef.current = deleteClip;
 
   function addText() {
     setOverlays((o) => [...o, { id: crypto.randomUUID(), text: "New text", start: currentTime, duration: 3, color: "#ffffff" }]);
@@ -664,13 +708,38 @@ function EditorPage() {
         item = clips.find((c) => c.id === id) ?? null;
       }
       if (!item) return;
+      pushHistory();
       setDragState({
         type, id, startX: e.clientX, startTime: item.start,
         startDuration: item.duration,
         startOriginalDuration: type.startsWith("audio") ? (item as AudioClip).originalDuration : item.duration,
       });
     },
-    [audioClips, clips]
+    [audioClips, clips, pushHistory]
+  );
+
+  // Snap a candidate time to the playhead or to any clip/audio edge within ~6px.
+  const snapTime = useCallback(
+    (t: number, ignoreId: string): number => {
+      const tol = 6 / PX_PER_SEC; // ~0.1s
+      const candidates: number[] = [currentTime];
+      for (const c of clips) {
+        if (c.id === ignoreId) continue;
+        candidates.push(c.start, c.start + c.duration);
+      }
+      for (const a of audioClips) {
+        if (a.id === ignoreId) continue;
+        candidates.push(a.start, a.start + a.duration);
+      }
+      let best = t;
+      let bestD = tol;
+      for (const cand of candidates) {
+        const d = Math.abs(cand - t);
+        if (d < bestD) { bestD = d; best = cand; }
+      }
+      return best;
+    },
+    [clips, audioClips, currentTime]
   );
 
   useEffect(() => {
@@ -679,22 +748,28 @@ function EditorPage() {
       const dx = e.clientX - dragState.startX;
       const dt = dx / PX_PER_SEC;
       if (dragState.type === "audio-start") {
-        const newStart = Math.max(0, dragState.startTime + dt);
+        const rawStart = Math.max(0, dragState.startTime + dt);
+        const newStart = snapTime(rawStart, dragState.id);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
         setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, start: newStart, duration: newDuration, playbackRate: a.originalDuration / newDuration } : a));
       } else if (dragState.type === "audio-end") {
-        const newDuration = Math.max(0.5, dragState.startDuration + dt);
+        const rawDur = Math.max(0.5, dragState.startDuration + dt);
+        const snappedEnd = snapTime(dragState.startTime + rawDur, dragState.id);
+        const newDuration = Math.max(0.5, snappedEnd - dragState.startTime);
         const clip = audioClips.find((a) => a.id === dragState.id);
         const originalDuration = clip?.originalDuration ?? dragState.startOriginalDuration;
         setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, duration: newDuration, playbackRate: originalDuration / newDuration } : a));
       } else if (dragState.type === "clip-start") {
-        const newStart = Math.max(0, dragState.startTime + dt);
+        const rawStart = Math.max(0, dragState.startTime + dt);
+        const newStart = snapTime(rawStart, dragState.id);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
         setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c)));
       } else if (dragState.type === "clip-end") {
-        const newDuration = Math.max(0.5, dragState.startDuration + dt);
+        const rawDur = Math.max(0.5, dragState.startDuration + dt);
+        const snappedEnd = snapTime(dragState.startTime + rawDur, dragState.id);
+        const newDuration = Math.max(0.5, snappedEnd - dragState.startTime);
         setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, duration: newDuration } : c)));
       }
     };
@@ -702,7 +777,29 @@ function EditorPage() {
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
     return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
-  }, [dragState, audioClips, clips]);
+  }, [dragState, audioClips, clips, snapTime]);
+
+  // Global keyboard shortcuts: Space, S, Delete/Backspace, Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+      }
+      if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
+      if (e.key === " " || e.code === "Space") { e.preventDefault(); setPlaying((p) => !p); return; }
+      if (e.key === "s" || e.key === "S") { e.preventDefault(); splitClipRef.current?.(); return; }
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteClipRef.current?.(); return; }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
+
 
   function addAudioTrack() {
     if (audioTrackCount >= MAX_AUDIO_TRACKS) { toast.error(`Maximum ${MAX_AUDIO_TRACKS} audio tracks`); return; }
@@ -947,12 +1044,20 @@ function EditorPage() {
               {/* Video preview — all active clips play together */}
               {activeClips.map((clip, idx) => (
                 <div key={clip.id} className={cn("absolute inset-0", idx > 0 && "pointer-events-none")} style={{ zIndex: activeClips.length - idx }}>
-                  <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} />
+                  <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} videoElRef={idx === 0 ? primaryVideoRef : undefined} />
                   {activePreset && activePreset.overlay !== "none" && (
                     <VfxOverlay kind={activePreset.overlay} color={activePreset.overlayColor} intensity={activePreset.intensity} playing={playing} />
                   )}
                 </div>
               ))}
+              {selectedClip?.brushBlur?.enabled && selectedClipId === activeClips[0]?.id && (
+                <BrushBlurOverlay
+                  state={selectedClip.brushBlur}
+                  editing={brushEditing}
+                  sourceRef={primaryVideoRef}
+                  onMaskChange={(mask) => updateClip({ brushBlur: { ...(selectedClip.brushBlur || DEFAULT_BRUSH_BLUR), mask } })}
+                />
+              )}
               {activeOverlay && (
                 <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none z-20">
                   <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>{activeOverlay.text}</span>
@@ -1034,6 +1139,51 @@ function EditorPage() {
               </Section>
             )}
 
+            {selectedClip && selectedClip.kind === "video" && (
+              <Section title="Brush Blur" icon={<Brush className="size-3.5 text-purple-400" />}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs">Enabled</span>
+                  <Switch
+                    checked={!!selectedClip.brushBlur?.enabled}
+                    onCheckedChange={(v) => updateClip({ brushBlur: { ...(selectedClip.brushBlur || DEFAULT_BRUSH_BLUR), enabled: v } })}
+                  />
+                </div>
+                {selectedClip.brushBlur?.enabled && (
+                  <>
+                    <AdjustSlider
+                      label="Brush size"
+                      value={selectedClip.brushBlur.radius}
+                      min={5} max={150}
+                      onChange={(v) => updateClip({ brushBlur: { ...selectedClip.brushBlur!, radius: v } })}
+                    />
+                    <AdjustSlider
+                      label="Blur strength"
+                      value={selectedClip.brushBlur.strength}
+                      min={2} max={40}
+                      onChange={(v) => updateClip({ brushBlur: { ...selectedClip.brushBlur!, strength: v } })}
+                    />
+                    <Button
+                      size="sm"
+                      variant={brushEditing ? "default" : "outline"}
+                      onClick={() => setBrushEditing((v) => !v)}
+                      className={cn("w-full", brushEditing && "bg-purple-500 hover:bg-purple-600 text-white")}
+                    >
+                      <Brush className="size-3.5" /> {brushEditing ? "Done painting" : "Paint blur area"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => updateClip({ brushBlur: { ...selectedClip.brushBlur!, mask: null } })}
+                      className="w-full text-xs text-studio-muted"
+                    >
+                      <Trash2 className="size-3" /> Clear painted mask
+                    </Button>
+                    <p className="text-[10px] text-studio-muted leading-relaxed">Paint to hide faces, license plates, or anything else. The blur follows the painted shape — toggle erase mode in the overlay toolbar.</p>
+                  </>
+                )}
+              </Section>
+            )}
+
             {selectedAudio && (
               <Section title={`Audio: ${selectedAudio.name}`} icon={<Music className="size-3.5 text-blue-400" />}>
                 <div className="flex items-center justify-between">
@@ -1087,15 +1237,22 @@ function EditorPage() {
         <div className="h-11 border-b border-studio-border flex items-center px-4 justify-between bg-studio-bg/50">
           {viewMode === "timeline" ? (
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId}>
+              <Button size="sm" variant="ghost" onClick={undo} title="Undo (Cmd/Ctrl+Z)">
+                <Undo2 className="size-3.5" /> Undo
+              </Button>
+              <Button size="sm" variant="ghost" onClick={redo} title="Redo (Cmd/Ctrl+Shift+Z)">
+                <Redo2 className="size-3.5" /> Redo
+              </Button>
+              <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId} title="Split (S)">
                 <Split className="size-3.5" /> Split
               </Button>
-              <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId}>
+              <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId} title="Delete (Del)">
                 <Trash2 className="size-3.5" /> Delete
               </Button>
               <Button size="sm" variant="ghost" onClick={addAudioTrack}>
                 <Plus className="size-3.5" /> Add Audio Track
               </Button>
+              <span className="text-[10px] text-studio-muted ml-2">Space play · S split · Del remove · ⌘Z undo</span>
             </div>
           ) : (
             <div className="text-xs text-studio-muted">Click a frame to jump to that time</div>
@@ -1305,7 +1462,7 @@ function formatTime(sec: number) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
 }
 
-function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle }: { clip: Clip; currentTime: number; playing: boolean; muted: boolean; filterStyle: string }) {
+function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle, videoElRef }: { clip: Clip; currentTime: number; playing: boolean; muted: boolean; filterStyle: string; videoElRef?: React.MutableRefObject<HTMLVideoElement | null> }) {
   const ref = useRef<HTMLVideoElement>(null);
   const src = clip.vfxUrl || clip.url || "";
 
@@ -1323,5 +1480,5 @@ function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle }: { c
     if (playing) { el.play().catch(() => {}); } else { el.pause(); }
   }, [playing, src]);
 
-  return <video ref={ref} muted={muted} playsInline preload="auto" className="w-full h-full object-contain" style={{ filter: filterStyle }} />;
+  return <video ref={(el) => { (ref as React.MutableRefObject<HTMLVideoElement | null>).current = el; if (videoElRef) videoElRef.current = el; }} crossOrigin="anonymous" muted={muted} playsInline preload="auto" className="w-full h-full object-contain" style={{ filter: filterStyle }} />;
 }
