@@ -50,6 +50,7 @@ type Clip = {
   storyboardFrames?: { time: number; thumbnail?: string }[];
   muteOriginal?: boolean;
   videoTrack: number;
+  brushBlur?: BrushBlurState;
 };
 
 type AudioClip = {
