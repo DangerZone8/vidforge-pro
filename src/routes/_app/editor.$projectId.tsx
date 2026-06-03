@@ -1044,12 +1044,20 @@ function EditorPage() {
               {/* Video preview — all active clips play together */}
               {activeClips.map((clip, idx) => (
                 <div key={clip.id} className={cn("absolute inset-0", idx > 0 && "pointer-events-none")} style={{ zIndex: activeClips.length - idx }}>
-                  <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} />
+                  <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} videoElRef={idx === 0 ? primaryVideoRef : undefined} />
                   {activePreset && activePreset.overlay !== "none" && (
                     <VfxOverlay kind={activePreset.overlay} color={activePreset.overlayColor} intensity={activePreset.intensity} playing={playing} />
                   )}
                 </div>
               ))}
+              {selectedClip?.brushBlur?.enabled && selectedClipId === activeClips[0]?.id && (
+                <BrushBlurOverlay
+                  state={selectedClip.brushBlur}
+                  editing={brushEditing}
+                  sourceRef={primaryVideoRef}
+                  onMaskChange={(mask) => updateClip({ brushBlur: { ...(selectedClip.brushBlur || DEFAULT_BRUSH_BLUR), mask } })}
+                />
+              )}
               {activeOverlay && (
                 <div className="absolute inset-x-0 bottom-12 text-center pointer-events-none z-20">
                   <span className="inline-block px-6 py-2 text-3xl font-bold drop-shadow-lg" style={{ color: activeOverlay.color }}>{activeOverlay.text}</span>
