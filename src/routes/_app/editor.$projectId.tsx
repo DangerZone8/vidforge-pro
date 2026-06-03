@@ -493,13 +493,16 @@ function EditorPage() {
 
   function deleteClip() {
     if (selectedClipId) {
+      pushHistory();
       setClips((c) => c.filter((x) => x.id !== selectedClipId));
       setSelectedClipId(null);
     } else if (selectedAudioId) {
+      pushHistory();
       setAudioClips((a) => a.filter((x) => x.id !== selectedAudioId));
       setSelectedAudioId(null);
     }
   }
+  deleteClipRef.current = deleteClip;
 
   function addText() {
     setOverlays((o) => [...o, { id: crypto.randomUUID(), text: "New text", start: currentTime, duration: 3, color: "#ffffff" }]);
