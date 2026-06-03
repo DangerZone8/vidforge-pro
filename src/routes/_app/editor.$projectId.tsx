@@ -1139,6 +1139,51 @@ function EditorPage() {
               </Section>
             )}
 
+            {selectedClip && selectedClip.kind === "video" && (
+              <Section title="Brush Blur" icon={<Brush className="size-3.5 text-purple-400" />}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs">Enabled</span>
+                  <Switch
+                    checked={!!selectedClip.brushBlur?.enabled}
+                    onCheckedChange={(v) => updateClip({ brushBlur: { ...(selectedClip.brushBlur || DEFAULT_BRUSH_BLUR), enabled: v } })}
+                  />
+                </div>
+                {selectedClip.brushBlur?.enabled && (
+                  <>
+                    <AdjustSlider
+                      label="Brush size"
+                      value={selectedClip.brushBlur.radius}
+                      min={5} max={150}
+                      onChange={(v) => updateClip({ brushBlur: { ...selectedClip.brushBlur!, radius: v } })}
+                    />
+                    <AdjustSlider
+                      label="Blur strength"
+                      value={selectedClip.brushBlur.strength}
+                      min={2} max={40}
+                      onChange={(v) => updateClip({ brushBlur: { ...selectedClip.brushBlur!, strength: v } })}
+                    />
+                    <Button
+                      size="sm"
+                      variant={brushEditing ? "default" : "outline"}
+                      onClick={() => setBrushEditing((v) => !v)}
+                      className={cn("w-full", brushEditing && "bg-purple-500 hover:bg-purple-600 text-white")}
+                    >
+                      <Brush className="size-3.5" /> {brushEditing ? "Done painting" : "Paint blur area"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => updateClip({ brushBlur: { ...selectedClip.brushBlur!, mask: null } })}
+                      className="w-full text-xs text-studio-muted"
+                    >
+                      <Trash2 className="size-3" /> Clear painted mask
+                    </Button>
+                    <p className="text-[10px] text-studio-muted leading-relaxed">Paint to hide faces, license plates, or anything else. The blur follows the painted shape — toggle erase mode in the overlay toolbar.</p>
+                  </>
+                )}
+              </Section>
+            )}
+
             {selectedAudio && (
               <Section title={`Audio: ${selectedAudio.name}`} icon={<Music className="size-3.5 text-blue-400" />}>
                 <div className="flex items-center justify-between">
