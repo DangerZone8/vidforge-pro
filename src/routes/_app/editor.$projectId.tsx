@@ -97,6 +97,8 @@ function EditorPage() {
   const [isProcessingVfx, setIsProcessingVfx] = useState(false);
   const [brushEditing, setBrushEditing] = useState(false);
   const primaryVideoRef = useRef<HTMLVideoElement | null>(null);
+  const splitClipRef = useRef<(() => void) | null>(null);
+  const deleteClipRef = useRef<(() => void) | null>(null);
 
   // Undo/redo history (snapshots of clips + audioClips + overlays)
   type Snapshot = { clips: Clip[]; audioClips: AudioClip[]; overlays: TextOverlay[] };
