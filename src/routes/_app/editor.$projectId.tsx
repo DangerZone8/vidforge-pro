@@ -95,6 +95,41 @@ function EditorPage() {
   const [vfxCategory, setVfxCategory] = useState<VfxCategory>("cinematic");
   const [exportOpen, setExportOpen] = useState(false);
   const [isProcessingVfx, setIsProcessingVfx] = useState(false);
+  const [brushEditing, setBrushEditing] = useState(false);
+  const primaryVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Undo/redo history (snapshots of clips + audioClips + overlays)
+  type Snapshot = { clips: Clip[]; audioClips: AudioClip[]; overlays: TextOverlay[] };
+  const historyRef = useRef<{ past: Snapshot[]; future: Snapshot[]; suspend: boolean }>({ past: [], future: [], suspend: false });
+  const snapshot = useCallback((): Snapshot => ({ clips, audioClips, overlays }), [clips, audioClips, overlays]);
+  const pushHistory = useCallback(() => {
+    const h = historyRef.current;
+    if (h.suspend) return;
+    h.past.push(snapshot());
+    if (h.past.length > 50) h.past.shift();
+    h.future = [];
+  }, [snapshot]);
+  const applySnapshot = useCallback((s: Snapshot) => {
+    historyRef.current.suspend = true;
+    setClips(s.clips);
+    setAudioClips(s.audioClips);
+    setOverlays(s.overlays);
+    setTimeout(() => { historyRef.current.suspend = false; }, 0);
+  }, []);
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    const prev = h.past.pop();
+    if (!prev) { toast.info("Nothing to undo"); return; }
+    h.future.push(snapshot());
+    applySnapshot(prev);
+  }, [snapshot, applySnapshot]);
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    const next = h.future.pop();
+    if (!next) { toast.info("Nothing to redo"); return; }
+    h.past.push(snapshot());
+    applySnapshot(next);
+  }, [snapshot, applySnapshot]);
 
   // Import mode dialog — ALWAYS shown for video files
   const [importDialog, setImportDialog] = useState<{
