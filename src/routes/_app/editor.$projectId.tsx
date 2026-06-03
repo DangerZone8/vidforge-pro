@@ -1192,15 +1192,22 @@ function EditorPage() {
         <div className="h-11 border-b border-studio-border flex items-center px-4 justify-between bg-studio-bg/50">
           {viewMode === "timeline" ? (
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId}>
+              <Button size="sm" variant="ghost" onClick={undo} title="Undo (Cmd/Ctrl+Z)">
+                <Undo2 className="size-3.5" /> Undo
+              </Button>
+              <Button size="sm" variant="ghost" onClick={redo} title="Redo (Cmd/Ctrl+Shift+Z)">
+                <Redo2 className="size-3.5" /> Redo
+              </Button>
+              <Button size="sm" variant="ghost" onClick={splitClip} disabled={!selectedClipId} title="Split (S)">
                 <Split className="size-3.5" /> Split
               </Button>
-              <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId}>
+              <Button size="sm" variant="ghost" onClick={deleteClip} disabled={!selectedClipId && !selectedAudioId} title="Delete (Del)">
                 <Trash2 className="size-3.5" /> Delete
               </Button>
               <Button size="sm" variant="ghost" onClick={addAudioTrack}>
                 <Plus className="size-3.5" /> Add Audio Track
               </Button>
+              <span className="text-[10px] text-studio-muted ml-2">Space play · S split · Del remove · ⌘Z undo</span>
             </div>
           ) : (
             <div className="text-xs text-studio-muted">Click a frame to jump to that time</div>
