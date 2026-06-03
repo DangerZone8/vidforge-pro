@@ -430,6 +430,7 @@ function EditorPage() {
       toast.info("Move playhead inside the clip to split");
       return;
     }
+    pushHistory();
     const originalSplitTime = c.playbackRate ? splitAt * c.playbackRate : splitAt;
     const a: Clip = { ...c, duration: splitAt };
     const b: Clip = {
@@ -440,8 +441,9 @@ function EditorPage() {
       storyboardFrames: c.storyboardFrames?.filter(f => f.time >= originalSplitTime),
     };
     setClips((all) => all.flatMap((x) => (x.id === c.id ? [a, b] : [x])));
-    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}. Use Inspector to convert either part to Audio Only.`);
+    toast.success(`Split "${c.name}" at ${formatTime(splitAt)}`);
   }
+  splitClipRef.current = splitClip;
 
   // Convert selected video clip to audio-only
   function convertToAudioOnly(clipId: string) {
