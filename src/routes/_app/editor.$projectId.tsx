@@ -1410,7 +1410,7 @@ function formatTime(sec: number) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
 }
 
-function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle }: { clip: Clip; currentTime: number; playing: boolean; muted: boolean; filterStyle: string }) {
+function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle, videoElRef }: { clip: Clip; currentTime: number; playing: boolean; muted: boolean; filterStyle: string; videoElRef?: React.MutableRefObject<HTMLVideoElement | null> }) {
   const ref = useRef<HTMLVideoElement>(null);
   const src = clip.vfxUrl || clip.url || "";
 
@@ -1428,5 +1428,5 @@ function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle }: { c
     if (playing) { el.play().catch(() => {}); } else { el.pause(); }
   }, [playing, src]);
 
-  return <video ref={ref} muted={muted} playsInline preload="auto" className="w-full h-full object-contain" style={{ filter: filterStyle }} />;
+  return <video ref={(el) => { (ref as React.MutableRefObject<HTMLVideoElement | null>).current = el; if (videoElRef) videoElRef.current = el; }} crossOrigin="anonymous" muted={muted} playsInline preload="auto" className="w-full h-full object-contain" style={{ filter: filterStyle }} />;
 }
