@@ -31,7 +31,7 @@ export function BrushBlurOverlay({
   editing: boolean;
   // The element to sample (the preview video). We draw it into the canvas,
   // blur via ctx.filter, then alpha-mask using the painted mask.
-  sourceRef: React.RefObject<HTMLVideoElement | HTMLCanvasElement | HTMLImageElement>;
+  sourceRef: React.RefObject<HTMLVideoElement | HTMLCanvasElement | HTMLImageElement | null>;
   onMaskChange: (mask: string | null) => void;
 }) {
   const maskRef = useRef<HTMLCanvasElement>(null);
