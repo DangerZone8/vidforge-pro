@@ -701,13 +701,38 @@ function EditorPage() {
         item = clips.find((c) => c.id === id) ?? null;
       }
       if (!item) return;
+      pushHistory();
       setDragState({
         type, id, startX: e.clientX, startTime: item.start,
         startDuration: item.duration,
         startOriginalDuration: type.startsWith("audio") ? (item as AudioClip).originalDuration : item.duration,
       });
     },
-    [audioClips, clips]
+    [audioClips, clips, pushHistory]
+  );
+
+  // Snap a candidate time to the playhead or to any clip/audio edge within ~6px.
+  const snapTime = useCallback(
+    (t: number, ignoreId: string): number => {
+      const tol = 6 / PX_PER_SEC; // ~0.1s
+      const candidates: number[] = [currentTime];
+      for (const c of clips) {
+        if (c.id === ignoreId) continue;
+        candidates.push(c.start, c.start + c.duration);
+      }
+      for (const a of audioClips) {
+        if (a.id === ignoreId) continue;
+        candidates.push(a.start, a.start + a.duration);
+      }
+      let best = t;
+      let bestD = tol;
+      for (const cand of candidates) {
+        const d = Math.abs(cand - t);
+        if (d < bestD) { bestD = d; best = cand; }
+      }
+      return best;
+    },
+    [clips, audioClips, currentTime]
   );
 
   useEffect(() => {
@@ -716,22 +741,28 @@ function EditorPage() {
       const dx = e.clientX - dragState.startX;
       const dt = dx / PX_PER_SEC;
       if (dragState.type === "audio-start") {
-        const newStart = Math.max(0, dragState.startTime + dt);
+        const rawStart = Math.max(0, dragState.startTime + dt);
+        const newStart = snapTime(rawStart, dragState.id);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
         setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, start: newStart, duration: newDuration, playbackRate: a.originalDuration / newDuration } : a));
       } else if (dragState.type === "audio-end") {
-        const newDuration = Math.max(0.5, dragState.startDuration + dt);
+        const rawDur = Math.max(0.5, dragState.startDuration + dt);
+        const snappedEnd = snapTime(dragState.startTime + rawDur, dragState.id);
+        const newDuration = Math.max(0.5, snappedEnd - dragState.startTime);
         const clip = audioClips.find((a) => a.id === dragState.id);
         const originalDuration = clip?.originalDuration ?? dragState.startOriginalDuration;
         setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, duration: newDuration, playbackRate: originalDuration / newDuration } : a));
       } else if (dragState.type === "clip-start") {
-        const newStart = Math.max(0, dragState.startTime + dt);
+        const rawStart = Math.max(0, dragState.startTime + dt);
+        const newStart = snapTime(rawStart, dragState.id);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
         setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c)));
       } else if (dragState.type === "clip-end") {
-        const newDuration = Math.max(0.5, dragState.startDuration + dt);
+        const rawDur = Math.max(0.5, dragState.startDuration + dt);
+        const snappedEnd = snapTime(dragState.startTime + rawDur, dragState.id);
+        const newDuration = Math.max(0.5, snappedEnd - dragState.startTime);
         setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, duration: newDuration } : c)));
       }
     };
@@ -739,7 +770,29 @@ function EditorPage() {
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
     return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
-  }, [dragState, audioClips, clips]);
+  }, [dragState, audioClips, clips, snapTime]);
+
+  // Global keyboard shortcuts: Space, S, Delete/Backspace, Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+      }
+      if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
+      if (e.key === " " || e.code === "Space") { e.preventDefault(); setPlaying((p) => !p); return; }
+      if (e.key === "s" || e.key === "S") { e.preventDefault(); splitClipRef.current?.(); return; }
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteClipRef.current?.(); return; }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
+
 
   function addAudioTrack() {
     if (audioTrackCount >= MAX_AUDIO_TRACKS) { toast.error(`Maximum ${MAX_AUDIO_TRACKS} audio tracks`); return; }
