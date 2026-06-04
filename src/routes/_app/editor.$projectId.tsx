@@ -535,10 +535,14 @@ function EditorPage() {
     audioClips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
     10,
   );
+  totalDurationRef.current = totalDuration;
+
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
 
   const activeClips = clips.filter((c) => currentTime >= c.start && currentTime < c.start + c.duration);
   const activeClip = activeClips[0] ?? null;
   const activeOverlay = overlays.find((o) => currentTime >= o.start && currentTime < o.start + o.duration);
+
 
   // ---- PLAYBACK ENGINE ----
   // Read totalDuration from a ref so the RAF loop doesn't restart on every
