@@ -26,8 +26,8 @@ function LoginPage() {
     if (!loading && user) navigate({ to: "/dashboard" });
   }, [loading, user, navigate]);
 
-  function validateEmail(email: string): boolean {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  function validateEmail(v: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -44,44 +44,99 @@ function LoginPage() {
     }
 
     setBusy(true);
-    setBusy(true);
     try {
       if (mode === "signup") {
-        const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) {
-          if (error.message.includes("already registered") || error.message.includes("already exists")) {
-            throw new Error("An account with this email already exists. Try signing in instead.");
-          }
-          throw error;
-        }
-        if (!data.session) {
-          // Email confirmation might be enabled — sign in directly to get a session
-          const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
-          if (signInErr) throw signInErr;
-        }
-        toast.success("Account created — welcome!");
+        await handleSignUp();
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) {
-          if (error.message.includes("Invalid login credentials") || error.message.includes("invalid_credentials")) {
-            throw new Error("Incorrect email or password. Please try again.");
-          }
-          if (error.message.includes("Email not confirmed")) {
-            throw new Error("Please confirm your email before signing in, or contact support.");
-          }
-          throw error;
-        }
-        if (data.session) {
-          toast.success("Welcome back!");
-        } else {
-          toast.error("Session not established. Please try again.");
-        }
+        await handleSignIn();
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Authentication failed";
-      toast.error(errorMessage);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleSignUp() {
+    // Step 1: Try to create the account
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: undefined },
+    });
+
+    // Step 2: Handle Supabase's silent-duplicate behavior.
+    // When email confirmation is ON and the email already exists, Supabase returns
+    // success with an empty identities array instead of an error.
+    const isSilentDuplicate =
+      !signUpError &&
+      signUpData.user &&
+      Array.isArray(signUpData.user.identities) &&
+      signUpData.user.identities.length === 0;
+
+    if (isSilentDuplicate) {
+      // Account already exists — sign them in directly
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) {
+        // Likely wrong password for an existing account
+        if (isInvalidCredentials(signInError.message)) {
+          toast.error("This email is already registered. Check your password and try signing in instead.");
+        } else {
+          toast.error(signInError.message);
+        }
+        return;
+      }
+      if (signInData.session) {
+        toast.success("Welcome back!");
+      }
+      return;
+    }
+
+    // Step 3: Handle real signup errors
+    if (signUpError) {
+      if (isAlreadyExists(signUpError.message)) {
+        toast.error("This email is already registered. Please sign in instead.");
+      } else {
+        toast.error(signUpError.message || "Sign up failed. Please try again.");
+      }
+      return;
+    }
+
+    // Step 4: Account created — get a session immediately (auto-confirm path)
+    if (signUpData.session) {
+      toast.success("Account created — welcome!");
+      return;
+    }
+
+    // Step 5: No session yet (email confirmation required by Supabase config).
+    // Try signing in directly — this works if auto-confirm is enabled in Supabase
+    // but the session wasn't returned inline.
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (!signInError && signInData.session) {
+      toast.success("Account created — welcome!");
+      return;
+    }
+
+    // Step 6: Email confirmation is genuinely required
+    toast.error("Account created, but your Supabase project requires email confirmation. Disable it in Authentication > Settings.");
+  }
+
+  async function handleSignIn() {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+    if (error) {
+      if (isInvalidCredentials(error.message)) {
+        toast.error("Incorrect email or password. Please try again.");
+      } else if (error.message.toLowerCase().includes("email not confirmed")) {
+        toast.error("Your email is not confirmed. Contact support or use a different account.");
+      } else {
+        toast.error(error.message || "Sign in failed. Please try again.");
+      }
+      return;
+    }
+
+    if (data.session) {
+      toast.success("Welcome back!");
+    } else {
+      toast.error("Session could not be established. Please try again.");
     }
   }
 
@@ -166,4 +221,14 @@ function LoginPage() {
       </div>
     </div>
   );
+}
+
+function isInvalidCredentials(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return m.includes("invalid login credentials") || m.includes("invalid_credentials") || m.includes("wrong password");
+}
+
+function isAlreadyExists(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return m.includes("already registered") || m.includes("already exists") || m.includes("user already");
 }
