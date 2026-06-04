@@ -545,10 +545,10 @@ function EditorPage() {
 
 
   // ---- PLAYBACK ENGINE ----
-  // Read totalDuration from a ref so the RAF loop doesn't restart on every
-  // clip edit (which would reset lastTime and cause stutters).
-  const totalDurationRef = useRef(0);
+  // totalDurationRef is hoisted above so the RAF loop can read the latest
+  // total without restarting on every clip edit.
   const playbackRef = useRef<{ lastTime: number; animationId: number }>({ lastTime: 0, animationId: 0 });
+
 
   useEffect(() => {
     const tick = (timestamp: number) => {
