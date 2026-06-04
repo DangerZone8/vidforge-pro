@@ -689,6 +689,23 @@ function EditorPage() {
     audioEngineRef.current.inFlight.clear();
   }, []);
 
+  // Auto-scroll the timeline horizontally so the playhead stays visible
+  // during playback. Triggered every time currentTime advances.
+  useEffect(() => {
+    const el = timelineScrollRef.current;
+    if (!el) return;
+    const playheadX = 80 + currentTime * PX_PER_SEC;
+    const viewLeft = el.scrollLeft;
+    const viewRight = viewLeft + el.clientWidth;
+    const margin = 80;
+    if (playheadX > viewRight - margin) {
+      el.scrollLeft = playheadX - el.clientWidth + margin * 2;
+    } else if (playheadX < viewLeft + margin) {
+      el.scrollLeft = Math.max(0, playheadX - margin);
+    }
+  }, [currentTime]);
+
+
   const activePreset = getPreset(activeClip?.vfxPresetId);
   const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
   const filterStyle = activePreset
