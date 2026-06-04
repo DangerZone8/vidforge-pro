@@ -1292,6 +1292,7 @@ function EditorPage() {
 
         {viewMode === "timeline" ? (
           <div
+            ref={timelineScrollRef}
             className="flex-1 overflow-x-auto overflow-y-auto bg-studio-bg/30 p-3 relative"
             onClick={(e) => {
               if (e.target === e.currentTarget) {
@@ -1302,7 +1303,11 @@ function EditorPage() {
               }
             }}
           >
+            {/* Time ruler */}
+            <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} />
+
             {/* Video tracks (top) */}
+
             {Array.from({ length: videoTrackCount }).map((_, ti) => (
               <TimelineRow key={`v${ti}`} label={`V${ti + 1}`} height="h-16" labelColor="text-orange-400" bgColor="bg-orange-500/5">
                 {clips
