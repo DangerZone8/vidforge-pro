@@ -530,6 +530,8 @@ function EditorPage() {
   }
 
   // Timing
+  const totalDurationRef = useRef(0);
+
   const totalDuration = Math.max(
     clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
     audioClips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
