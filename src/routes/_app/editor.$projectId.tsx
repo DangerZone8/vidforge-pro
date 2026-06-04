@@ -530,18 +530,27 @@ function EditorPage() {
   }
 
   // Timing
+  const totalDurationRef = useRef(0);
+
   const totalDuration = Math.max(
     clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
     audioClips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
     10,
   );
+  totalDurationRef.current = totalDuration;
+
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
 
   const activeClips = clips.filter((c) => currentTime >= c.start && currentTime < c.start + c.duration);
   const activeClip = activeClips[0] ?? null;
   const activeOverlay = overlays.find((o) => currentTime >= o.start && currentTime < o.start + o.duration);
 
+
   // ---- PLAYBACK ENGINE ----
+  // totalDurationRef is hoisted above so the RAF loop can read the latest
+  // total without restarting on every clip edit.
   const playbackRef = useRef<{ lastTime: number; animationId: number }>({ lastTime: 0, animationId: 0 });
+
 
   useEffect(() => {
     const tick = (timestamp: number) => {
@@ -550,16 +559,20 @@ function EditorPage() {
         playbackRef.current.lastTime = timestamp;
         setCurrentTime((t) => {
           const nt = t + dt;
-          if (nt >= totalDuration) { setPlaying(false); return totalDuration; }
+          const td = totalDurationRef.current;
+          if (nt >= td) { setPlaying(false); return td; }
           return nt;
         });
+      } else {
+        playbackRef.current.lastTime = timestamp;
       }
       playbackRef.current.animationId = requestAnimationFrame(tick);
     };
     playbackRef.current.lastTime = performance.now();
     playbackRef.current.animationId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(playbackRef.current.animationId);
-  }, [playing, totalDuration]);
+  }, [playing]);
+
 
   // ---- MULTI-TRACK AUDIO PLAYBACK ENGINE ----
   const audioEngineRef = useRef<{
@@ -675,6 +688,23 @@ function EditorPage() {
     audioEngineRef.current.nodes.clear();
     audioEngineRef.current.inFlight.clear();
   }, []);
+
+  // Auto-scroll the timeline horizontally so the playhead stays visible
+  // during playback. Triggered every time currentTime advances.
+  useEffect(() => {
+    const el = timelineScrollRef.current;
+    if (!el) return;
+    const playheadX = 80 + currentTime * PX_PER_SEC;
+    const viewLeft = el.scrollLeft;
+    const viewRight = viewLeft + el.clientWidth;
+    const margin = 80;
+    if (playheadX > viewRight - margin) {
+      el.scrollLeft = playheadX - el.clientWidth + margin * 2;
+    } else if (playheadX < viewLeft + margin) {
+      el.scrollLeft = Math.max(0, playheadX - margin);
+    }
+  }, [currentTime]);
+
 
   const activePreset = getPreset(activeClip?.vfxPresetId);
   const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
@@ -1262,6 +1292,7 @@ function EditorPage() {
 
         {viewMode === "timeline" ? (
           <div
+            ref={timelineScrollRef}
             className="flex-1 overflow-x-auto overflow-y-auto bg-studio-bg/30 p-3 relative"
             onClick={(e) => {
               if (e.target === e.currentTarget) {
@@ -1272,7 +1303,11 @@ function EditorPage() {
               }
             }}
           >
+            {/* Time ruler */}
+            <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} />
+
             {/* Video tracks (top) */}
+
             {Array.from({ length: videoTrackCount }).map((_, ti) => (
               <TimelineRow key={`v${ti}`} label={`V${ti + 1}`} height="h-16" labelColor="text-orange-400" bgColor="bg-orange-500/5">
                 {clips
@@ -1440,6 +1475,57 @@ function TimelineRow({ label, children, height = "h-12", labelColor, bgColor }: 
       <div className="flex-1 relative">{children}</div>
     </div>
   );
+}
+
+function TimelineRuler({ totalDuration, onSeek }: { totalDuration: number; onSeek: (t: number) => void }) {
+  // Pick a tick interval that gives ~80px between major ticks.
+  const target = 80 / PX_PER_SEC;
+  const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+  const major = steps.find((s) => s >= target) ?? 60;
+  const minor = major / 5;
+  const totalWithPad = Math.ceil(totalDuration + 5);
+  const ticks: number[] = [];
+  for (let t = 0; t <= totalWithPad; t += minor) ticks.push(Math.round(t * 100) / 100);
+
+  return (
+    <div className="flex items-stretch h-6 mb-1 select-none">
+      <div className="w-20 h-full border-r border-studio-border bg-studio-surface shrink-0" />
+      <div
+        className="flex-1 relative cursor-pointer"
+        style={{ minWidth: `${totalWithPad * PX_PER_SEC}px` }}
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          onSeek(Math.max(0, Math.min(totalDuration, x / PX_PER_SEC)));
+        }}
+      >
+        {ticks.map((t, i) => {
+          const isMajor = Math.abs((t / major) - Math.round(t / major)) < 0.001;
+          return (
+            <div
+              key={i}
+              className="absolute top-0 bottom-0"
+              style={{ left: `${t * PX_PER_SEC}px` }}
+            >
+              <div className={cn("absolute top-0 w-px", isMajor ? "h-full bg-studio-muted/50" : "h-1/2 bg-studio-muted/20")} />
+              {isMajor && (
+                <span className="absolute top-0 left-1 text-[9px] font-mono text-studio-muted leading-none">
+                  {formatRuler(t)}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function formatRuler(sec: number) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  if (m === 0) return `${s}s`;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function AdjustSlider({ label, value, min, max, onChange, suffix = "" }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void; suffix?: string }) {
