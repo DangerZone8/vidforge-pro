@@ -142,13 +142,16 @@ function EditorPage() {
 
   // Dragging state
   const [dragState, setDragState] = useState<{
-    type: "audio-start" | "audio-end" | "clip-start" | "clip-end" | null;
+    type: "audio-start" | "audio-end" | "clip-start" | "clip-end" | "clip-move" | "audio-move" | null;
     id: string;
     startX: number;
     startTime: number;
     startDuration: number;
     startOriginalDuration: number;
   } | null>(null);
+
+  // Snap guide — time position of current snap target (shown as a vertical line)
+  const [snapGuide, setSnapGuide] = useState<number | null>(null);
 
   const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null;
   const selectedAudio = audioClips.find((a) => a.id === selectedAudioId) ?? null;
@@ -728,7 +731,7 @@ function EditorPage() {
 
   // Drag handlers
   const handleMouseDown = useCallback(
-    (e: React.MouseEvent, type: "audio-start" | "audio-end" | "clip-start" | "clip-end", id: string) => {
+    (e: React.MouseEvent, type: "audio-start" | "audio-end" | "clip-start" | "clip-end" | "clip-move" | "audio-move", id: string) => {
       e.preventDefault();
       e.stopPropagation();
       let item: AudioClip | Clip | null = null;
@@ -748,11 +751,12 @@ function EditorPage() {
     [audioClips, clips, pushHistory]
   );
 
-  // Snap a candidate time to the playhead or to any clip/audio edge within ~6px.
+  // Snap a candidate time to the playhead or to any clip/audio edge within ~8px.
+  // Returns { time, snapped } so callers can show a guide line.
   const snapTime = useCallback(
-    (t: number, ignoreId: string): number => {
-      const tol = 6 / PX_PER_SEC; // ~0.1s
-      const candidates: number[] = [currentTime];
+    (t: number, ignoreId: string): { time: number; snapped: boolean } => {
+      const tol = 8 / PX_PER_SEC;
+      const candidates: number[] = [currentTime, 0];
       for (const c of clips) {
         if (c.id === ignoreId) continue;
         candidates.push(c.start, c.start + c.duration);
@@ -767,7 +771,7 @@ function EditorPage() {
         const d = Math.abs(cand - t);
         if (d < bestD) { bestD = d; best = cand; }
       }
-      return best;
+      return { time: best, snapped: best !== t };
     },
     [clips, audioClips, currentTime]
   );
@@ -777,33 +781,50 @@ function EditorPage() {
     const handleMouseMove = (e: MouseEvent) => {
       const dx = e.clientX - dragState.startX;
       const dt = dx / PX_PER_SEC;
-      if (dragState.type === "audio-start") {
+
+      if (dragState.type === "clip-move") {
         const rawStart = Math.max(0, dragState.startTime + dt);
-        const newStart = snapTime(rawStart, dragState.id);
+        const { time: newStart, snapped } = snapTime(rawStart, dragState.id);
+        setSnapGuide(snapped ? newStart : null);
+        setClips((all) => all.map((c) => c.id === dragState.id ? { ...c, start: newStart } : c));
+      } else if (dragState.type === "audio-move") {
+        const rawStart = Math.max(0, dragState.startTime + dt);
+        const { time: newStart, snapped } = snapTime(rawStart, dragState.id);
+        setSnapGuide(snapped ? newStart : null);
+        setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, start: newStart } : a));
+      } else if (dragState.type === "audio-start") {
+        const rawStart = Math.max(0, dragState.startTime + dt);
+        const { time: newStart, snapped } = snapTime(rawStart, dragState.id);
+        setSnapGuide(snapped ? newStart : null);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
         setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, start: newStart, duration: newDuration, playbackRate: a.originalDuration / newDuration } : a));
       } else if (dragState.type === "audio-end") {
         const rawDur = Math.max(0.5, dragState.startDuration + dt);
-        const snappedEnd = snapTime(dragState.startTime + rawDur, dragState.id);
+        const rawEnd = dragState.startTime + rawDur;
+        const { time: snappedEnd, snapped } = snapTime(rawEnd, dragState.id);
+        setSnapGuide(snapped ? snappedEnd : null);
         const newDuration = Math.max(0.5, snappedEnd - dragState.startTime);
         const clip = audioClips.find((a) => a.id === dragState.id);
         const originalDuration = clip?.originalDuration ?? dragState.startOriginalDuration;
         setAudioClips((all) => all.map((a) => a.id === dragState.id ? { ...a, duration: newDuration, playbackRate: originalDuration / newDuration } : a));
       } else if (dragState.type === "clip-start") {
         const rawStart = Math.max(0, dragState.startTime + dt);
-        const newStart = snapTime(rawStart, dragState.id);
+        const { time: newStart, snapped } = snapTime(rawStart, dragState.id);
+        setSnapGuide(snapped ? newStart : null);
         const newDuration = dragState.startDuration - (newStart - dragState.startTime);
         if (newDuration < 0.5) return;
-        setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c)));
+        setClips((all) => all.map((c) => c.id === dragState.id ? { ...c, start: newStart, duration: newDuration } : c));
       } else if (dragState.type === "clip-end") {
         const rawDur = Math.max(0.5, dragState.startDuration + dt);
-        const snappedEnd = snapTime(dragState.startTime + rawDur, dragState.id);
+        const rawEnd = dragState.startTime + rawDur;
+        const { time: snappedEnd, snapped } = snapTime(rawEnd, dragState.id);
+        setSnapGuide(snapped ? snappedEnd : null);
         const newDuration = Math.max(0.5, snappedEnd - dragState.startTime);
-        setClips((all) => all.map((c) => (c.id === dragState.id ? { ...c, duration: newDuration } : c)));
+        setClips((all) => all.map((c) => c.id === dragState.id ? { ...c, duration: newDuration } : c));
       }
     };
-    const handleMouseUp = () => { setDragState(null); };
+    const handleMouseUp = () => { setDragState(null); setSnapGuide(null); };
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
     return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
@@ -1071,10 +1092,14 @@ function EditorPage() {
 
           <div className="flex-1 flex items-center justify-center p-6">
             <div className="relative w-full max-w-5xl aspect-video bg-zinc-900 rounded-xl overflow-hidden shadow-2xl border border-studio-border">
-              {/* Video preview — all active clips play together */}
+              {/* Video/image preview — all active clips render together */}
               {activeClips.map((clip, idx) => (
                 <div key={clip.id} className={cn("absolute inset-0", idx > 0 && "pointer-events-none")} style={{ zIndex: activeClips.length - idx }}>
-                  <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} videoElRef={idx === 0 ? primaryVideoRef : undefined} />
+                  {clip.kind === "image" ? (
+                    <ClipImagePlayer clip={clip} filterStyle={filterStyle} />
+                  ) : (
+                    <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} videoElRef={idx === 0 ? primaryVideoRef : undefined} />
+                  )}
                   {activePreset && activePreset.overlay !== "none" && (
                     <VfxOverlay kind={activePreset.overlay} color={activePreset.overlayColor} intensity={activePreset.intensity} playing={playing} />
                   )}
@@ -1307,35 +1332,62 @@ function EditorPage() {
             <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} />
 
             {/* Video tracks (top) */}
-
             {Array.from({ length: videoTrackCount }).map((_, ti) => (
               <TimelineRow key={`v${ti}`} label={`V${ti + 1}`} height="h-16" labelColor="text-orange-400" bgColor="bg-orange-500/5">
+                {/* Drop zone hint when no clips */}
+                {clips.filter((c) => c.videoTrack === ti).length === 0 && ti === 0 && (
+                  <div className="absolute inset-0 flex items-center px-4 pointer-events-none">
+                    <span className="text-xs text-studio-muted">Click a video or image in the media panel to add here</span>
+                  </div>
+                )}
                 {clips
                   .filter((c) => c.videoTrack === ti)
                   .map((c) => (
                     <div
                       key={c.id}
                       onClick={(e) => { e.stopPropagation(); setSelectedClipId(c.id); setSelectedAudioId(null); handleSeek(c.start); }}
+                      onMouseDown={(e) => {
+                        // Body drag = move clip (only if not clicking trim handles)
+                        const target = e.target as HTMLElement;
+                        if (target.dataset.handle) return;
+                        handleMouseDown(e, "clip-move", c.id);
+                      }}
                       className={cn(
-                        "h-full absolute rounded flex items-center px-3 gap-2 cursor-pointer transition-colors overflow-hidden group",
+                        "h-full absolute rounded overflow-hidden group cursor-grab active:cursor-grabbing transition-colors",
                         selectedClipId === c.id
-                          ? "bg-gradient-to-r from-orange-500/30 to-pink-500/30 border-2 border-orange-500"
-                          : "bg-gradient-to-r from-orange-500/15 to-pink-500/15 border border-orange-500/40 hover:border-orange-500"
+                          ? c.kind === "image"
+                            ? "border-2 border-emerald-500 ring-1 ring-emerald-500/50"
+                            : "border-2 border-orange-500 ring-1 ring-orange-500/50"
+                          : c.kind === "image"
+                            ? "border border-emerald-500/40 hover:border-emerald-500"
+                            : "border border-orange-500/40 hover:border-orange-500"
                       )}
                       style={{ width: `${c.duration * PX_PER_SEC}px`, left: `${c.start * PX_PER_SEC}px` }}
                     >
-                      <div className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-orange-500/30" onMouseDown={(e) => handleMouseDown(e, "clip-start", c.id)} />
-                      <div className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-orange-500/30" onMouseDown={(e) => handleMouseDown(e, "clip-end", c.id)} />
-                      <div className="size-6 bg-black/40 rounded-sm shrink-0 grid place-items-center text-[9px]">
-                        {c.vfxPresetApplied ? "VFX" : c.kind === "video" ? "VID" : "IMG"}
+                      {/* Background: image thumbnail or video gradient */}
+                      {c.kind === "image" && c.url ? (
+                        <img src={c.url} alt={c.name} className="absolute inset-0 w-full h-full object-cover opacity-60 pointer-events-none" draggable={false} />
+                      ) : (
+                        <div className={cn("absolute inset-0", selectedClipId === c.id ? "bg-gradient-to-r from-orange-500/30 to-pink-500/30" : "bg-gradient-to-r from-orange-500/15 to-pink-500/15")} />
+                      )}
+                      {/* Left trim handle */}
+                      <div data-handle="start" className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, "clip-start", c.id); }}>
+                        <div className="w-0.5 h-4 bg-white/50 rounded" />
                       </div>
-                      <span className="text-[10px] font-medium truncate">{c.name}</span>
-                      {c.muteOriginal && <VolumeX className="size-3 text-studio-muted ml-auto shrink-0" />}
+                      {/* Right trim handle */}
+                      <div data-handle="end" className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize hover:bg-white/20 z-10 flex items-center justify-center" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, "clip-end", c.id); }}>
+                        <div className="w-0.5 h-4 bg-white/50 rounded" />
+                      </div>
+                      {/* Label */}
+                      <div className="absolute inset-x-3 inset-y-0 flex items-center gap-2 pointer-events-none">
+                        <span className={cn("text-[8px] font-bold uppercase px-1 py-0.5 rounded shrink-0", c.kind === "image" ? "bg-emerald-500/80 text-white" : "bg-black/40 text-white/80")}>
+                          {c.kind === "image" ? "IMG" : c.vfxPresetApplied ? "VFX" : "VID"}
+                        </span>
+                        <span className="text-[10px] font-medium truncate text-white drop-shadow">{c.name}</span>
+                        {c.muteOriginal && <VolumeX className="size-3 text-white/60 ml-auto shrink-0" />}
+                      </div>
                     </div>
                   ))}
-                {clips.filter((c) => c.videoTrack === ti).length === 0 && ti === 0 && (
-                  <div className="text-xs text-studio-muted px-3 self-center">Click a video file to add here</div>
-                )}
               </TimelineRow>
             ))}
 
@@ -1360,8 +1412,13 @@ function EditorPage() {
                     <div
                       key={a.id}
                       onClick={(e) => { e.stopPropagation(); setSelectedAudioId(a.id); setSelectedClipId(null); }}
+                      onMouseDown={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.dataset.handle) return;
+                        handleMouseDown(e, "audio-move", a.id);
+                      }}
                       className={cn(
-                        "h-full absolute rounded flex items-center gap-1 cursor-pointer transition-colors overflow-hidden group",
+                        "h-full absolute rounded flex items-center gap-1 cursor-grab active:cursor-grabbing transition-colors overflow-hidden group",
                         selectedAudioId === a.id
                           ? "bg-blue-500/30 border-2 border-blue-400"
                           : a.fromVideo
@@ -1370,23 +1427,25 @@ function EditorPage() {
                       )}
                       style={{ width: `${a.duration * PX_PER_SEC}px`, left: `${a.start * PX_PER_SEC}px` }}
                     >
-                      <div className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-500/30 z-10" onMouseDown={(e) => handleMouseDown(e, "audio-start", a.id)} />
-                      <div className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-blue-500/30 z-10" onMouseDown={(e) => handleMouseDown(e, "audio-end", a.id)} />
+                      <div data-handle="start" className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize hover:bg-blue-500/30 z-10 flex items-center justify-center" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, "audio-start", a.id); }}>
+                        <div className="w-0.5 h-4 bg-white/40 rounded" />
+                      </div>
+                      <div data-handle="end" className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize hover:bg-blue-500/30 z-10 flex items-center justify-center" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, "audio-end", a.id); }}>
+                        <div className="w-0.5 h-4 bg-white/40 rounded" />
+                      </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); updateAudio(a.id, { muted: !a.muted }); }}
-                        className="size-6 shrink-0 grid place-items-center text-blue-300 ml-1"
+                        className="size-6 shrink-0 grid place-items-center text-blue-300 ml-1 z-10"
                       >
                         {a.muted ? <VolumeX className="size-3" /> : <Volume2 className="size-3" />}
                       </button>
-                      <div className="flex-1 min-w-0 h-full relative">
+                      <div className="flex-1 min-w-0 h-full relative pointer-events-none">
                         <Waveform url={a.url} width={Math.max(20, a.duration * PX_PER_SEC - 40)} height={32} color="#3b82f6" />
-                        <span className="absolute top-0.5 left-1 text-[9px] font-medium truncate text-blue-100/90 pointer-events-none">
+                        <span className="absolute top-0.5 left-1 text-[9px] font-medium truncate text-blue-100/90">
                           {a.name}
                         </span>
                         {a.fromVideo && (
-                          <span className="absolute top-0.5 right-1 text-[7px] text-purple-300/80 pointer-events-none">
-                            from video
-                          </span>
+                          <span className="absolute top-0.5 right-1 text-[7px] text-purple-300/80">from video</span>
                         )}
                         {a.playbackRate !== 1 && (
                           <span className="absolute bottom-0.5 right-1 text-[8px] text-blue-300/70">{((1 / a.playbackRate) * 100).toFixed(0)}%</span>
@@ -1395,7 +1454,9 @@ function EditorPage() {
                     </div>
                   ))}
                 {audioClips.filter((a) => a.track === ti).length === 0 && ti === 0 && (
-                  <div className="text-xs text-studio-muted px-3 self-center">Audio tracks play together with video</div>
+                  <div className="absolute inset-0 flex items-center px-4 pointer-events-none">
+                    <span className="text-xs text-studio-muted">Audio tracks play together with video</span>
+                  </div>
                 )}
               </TimelineRow>
             ))}
@@ -1407,6 +1468,16 @@ function EditorPage() {
             >
               <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-orange-500 rounded-full shadow-lg shadow-orange-500/50" />
             </div>
+
+            {/* Snap guide — yellow vertical line that appears when a drag snaps to an edge */}
+            {snapGuide !== null && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-30 pointer-events-none"
+                style={{ left: `${80 + snapGuide * PX_PER_SEC}px` }}
+              >
+                <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-yellow-400 rounded-full" />
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-4">
@@ -1546,6 +1617,19 @@ function formatTime(sec: number) {
   const s = Math.floor(sec % 60);
   const f = Math.floor((sec % 1) * 100);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(f).padStart(2, "0")}`;
+}
+
+function ClipImagePlayer({ clip, filterStyle }: { clip: Clip; filterStyle: string }) {
+  if (!clip.url) return null;
+  return (
+    <img
+      src={clip.url}
+      alt={clip.name}
+      className="w-full h-full object-contain"
+      style={{ filter: filterStyle }}
+      draggable={false}
+    />
+  );
 }
 
 function ClipVideoPlayer({ clip, currentTime, playing, muted, filterStyle, videoElRef }: { clip: Clip; currentTime: number; playing: boolean; muted: boolean; filterStyle: string; videoElRef?: React.MutableRefObject<HTMLVideoElement | null> }) {

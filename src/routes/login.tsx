@@ -44,19 +44,33 @@ function LoginPage() {
     }
 
     setBusy(true);
+    setBusy(true);
     try {
       if (mode === "signup") {
         const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
+        if (error) {
+          if (error.message.includes("already registered") || error.message.includes("already exists")) {
+            throw new Error("An account with this email already exists. Try signing in instead.");
+          }
+          throw error;
+        }
         if (!data.session) {
-          // Auto-confirm is enabled, but if no session came back, sign in directly
+          // Email confirmation might be enabled — sign in directly to get a session
           const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
           if (signInErr) throw signInErr;
         }
         toast.success("Account created — welcome!");
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        if (error) {
+          if (error.message.includes("Invalid login credentials") || error.message.includes("invalid_credentials")) {
+            throw new Error("Incorrect email or password. Please try again.");
+          }
+          if (error.message.includes("Email not confirmed")) {
+            throw new Error("Please confirm your email before signing in, or contact support.");
+          }
+          throw error;
+        }
         if (data.session) {
           toast.success("Welcome back!");
         } else {
