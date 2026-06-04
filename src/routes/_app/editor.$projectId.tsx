@@ -541,6 +541,9 @@ function EditorPage() {
   const activeOverlay = overlays.find((o) => currentTime >= o.start && currentTime < o.start + o.duration);
 
   // ---- PLAYBACK ENGINE ----
+  // Read totalDuration from a ref so the RAF loop doesn't restart on every
+  // clip edit (which would reset lastTime and cause stutters).
+  const totalDurationRef = useRef(0);
   const playbackRef = useRef<{ lastTime: number; animationId: number }>({ lastTime: 0, animationId: 0 });
 
   useEffect(() => {
@@ -550,16 +553,20 @@ function EditorPage() {
         playbackRef.current.lastTime = timestamp;
         setCurrentTime((t) => {
           const nt = t + dt;
-          if (nt >= totalDuration) { setPlaying(false); return totalDuration; }
+          const td = totalDurationRef.current;
+          if (nt >= td) { setPlaying(false); return td; }
           return nt;
         });
+      } else {
+        playbackRef.current.lastTime = timestamp;
       }
       playbackRef.current.animationId = requestAnimationFrame(tick);
     };
     playbackRef.current.lastTime = performance.now();
     playbackRef.current.animationId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(playbackRef.current.animationId);
-  }, [playing, totalDuration]);
+  }, [playing]);
+
 
   // ---- MULTI-TRACK AUDIO PLAYBACK ENGINE ----
   const audioEngineRef = useRef<{
