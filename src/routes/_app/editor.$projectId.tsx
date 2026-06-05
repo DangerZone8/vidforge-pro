@@ -233,6 +233,7 @@ function EditorPage() {
       if (ts?.overlays) setOverlays(ts.overlays);
       if (ts?.adjustments) setAdj(ts.adjustments);
       if (ts?.viewMode) setViewMode(ts.viewMode);
+      if (ts?.markers) setMarkers(ts.markers);
     }
   }, [project]);
 
