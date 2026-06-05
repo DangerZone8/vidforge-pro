@@ -85,6 +85,7 @@ type AudioClip = {
 };
 
 type TextOverlay = { id: string; text: string; start: number; duration: number; color: string };
+type Marker = { id: string; time: number; label: string; color: string };
 type Adjustments = { brightness: number; contrast: number; saturation: number; blur: number };
 type ViewMode = "timeline" | "storyboard";
 type ImportMode = "video" | "audio";
