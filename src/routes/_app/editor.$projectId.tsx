@@ -916,7 +916,19 @@ function EditorPage() {
     return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
   }, [dragState, audioClips, clips, snapTime]);
 
-  // Global keyboard shortcuts: Space, S, Delete/Backspace, Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z
+  // Drop a marker at the current playhead position
+  const dropMarker = useCallback(() => {
+    setMarkers((m) => {
+      // Don't duplicate a marker that's within 0.1s of an existing one
+      if (m.some((x) => Math.abs(x.time - currentTime) < 0.1)) return m;
+      const next = [...m, { id: crypto.randomUUID(), time: currentTime, label: `M${m.length + 1}`, color: "#fbbf24" }];
+      next.sort((a, b) => a.time - b.time);
+      return next;
+    });
+    toast.success(`Marker dropped at ${formatTime(currentTime)}`);
+  }, [currentTime]);
+
+  // Pro keyboard shortcuts — Premiere/Resolve style
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -929,13 +941,72 @@ function EditorPage() {
         return;
       }
       if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
-      if (e.key === " " || e.code === "Space") { e.preventDefault(); setPlaying((p) => !p); return; }
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        shuttleSpeedRef.current = 1;
+        setPlaying((p) => !p);
+        return;
+      }
+      // J / K / L shuttle
+      if (e.key === "k" || e.key === "K") {
+        e.preventDefault();
+        shuttleSpeedRef.current = 1;
+        setPlaying(false);
+        return;
+      }
+      if (e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        const cur = shuttleSpeedRef.current;
+        const next = cur > 0 ? Math.min(cur * 2, 16) : 1;
+        shuttleSpeedRef.current = next;
+        setPlaying(true);
+        if (next > 1) toast.message(`Shuttle ${next}x`, { duration: 600 });
+        return;
+      }
+      if (e.key === "j" || e.key === "J") {
+        e.preventDefault();
+        const cur = shuttleSpeedRef.current;
+        const next = cur < 0 ? Math.max(cur * 2, -16) : -1;
+        shuttleSpeedRef.current = next;
+        setPlaying(true);
+        toast.message(`Shuttle ${next}x`, { duration: 600 });
+        return;
+      }
+      // Marker
+      if (e.key === "m" || e.key === "M") { e.preventDefault(); dropMarker(); return; }
+      // Frame-by-frame nudge
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const step = e.shiftKey ? 1 : 1 / 30;
+        setPlaying(false);
+        setCurrentTime((t) => Math.max(0, t - step));
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const step = e.shiftKey ? 1 : 1 / 30;
+        setPlaying(false);
+        setCurrentTime((t) => Math.min(totalDurationRef.current, t + step));
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        setPlaying(false);
+        setCurrentTime(0);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        setPlaying(false);
+        setCurrentTime(totalDurationRef.current);
+        return;
+      }
       if (e.key === "s" || e.key === "S") { e.preventDefault(); splitClipRef.current?.(); return; }
       if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteClipRef.current?.(); return; }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [undo, redo]);
+  }, [undo, redo, dropMarker]);
 
 
   function addAudioTrack() {
