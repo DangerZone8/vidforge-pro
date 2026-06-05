@@ -1602,7 +1602,7 @@ function EditorPage() {
             }}
           >
             {/* Time ruler */}
-            <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} />
+            <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} markers={markers} onMarkerDelete={(id) => setMarkers((m) => m.filter((x) => x.id !== id))} />
 
             {/* Video tracks (top) */}
             {Array.from({ length: videoTrackCount }).map((_, ti) => (
