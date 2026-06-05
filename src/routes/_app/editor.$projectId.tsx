@@ -85,6 +85,7 @@ type AudioClip = {
 };
 
 type TextOverlay = { id: string; text: string; start: number; duration: number; color: string };
+type Marker = { id: string; time: number; label: string; color: string };
 type Adjustments = { brightness: number; contrast: number; saturation: number; blur: number };
 type ViewMode = "timeline" | "storyboard";
 type ImportMode = "video" | "audio";
@@ -140,6 +141,8 @@ function EditorPage() {
   const [isProcessingVfx, setIsProcessingVfx] = useState(false);
   const [brushEditing, setBrushEditing] = useState(false);
   const [kfProp, setKfProp] = useState<KfProp>("opacity");
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const shuttleSpeedRef = useRef(1); // 1 = normal forward, -1 = reverse, 2/4/8/16 = JKL shuttle
   const primaryVideoRef = useRef<HTMLVideoElement | null>(null);
   const splitClipRef = useRef<(() => void) | null>(null);
   const deleteClipRef = useRef<(() => void) | null>(null);
@@ -230,6 +233,7 @@ function EditorPage() {
       if (ts?.overlays) setOverlays(ts.overlays);
       if (ts?.adjustments) setAdj(ts.adjustments);
       if (ts?.viewMode) setViewMode(ts.viewMode);
+      if (ts?.markers) setMarkers(ts.markers);
     }
   }, [project]);
 
@@ -241,7 +245,7 @@ function EditorPage() {
       );
       const { error } = await supabase.from("projects").update({
         title, duration_seconds: totalDuration,
-        timeline_state: { clips, audioClips, overlays, adjustments: adj, viewMode } as any,
+        timeline_state: { clips, audioClips, overlays, adjustments: adj, viewMode, markers } as any,
       }).eq("id", projectId);
       if (error) throw error;
     },
@@ -612,10 +616,12 @@ function EditorPage() {
       if (playing) {
         const dt = (timestamp - playbackRef.current.lastTime) / 1000;
         playbackRef.current.lastTime = timestamp;
+        const speed = shuttleSpeedRef.current || 1;
         setCurrentTime((t) => {
-          const nt = t + dt;
+          const nt = t + dt * speed;
           const td = totalDurationRef.current;
-          if (nt >= td) { setPlaying(false); return td; }
+          if (nt >= td) { setPlaying(false); shuttleSpeedRef.current = 1; return td; }
+          if (nt <= 0) { setPlaying(false); shuttleSpeedRef.current = 1; return 0; }
           return nt;
         });
       } else {
@@ -634,8 +640,9 @@ function EditorPage() {
     context: AudioContext | null;
     nodes: Map<string, { source: AudioBufferSourceNode; gain: GainNode; started: boolean }>;
     masterGain: GainNode | null;
+    analyser: AnalyserNode | null;
     inFlight: Set<string>;
-  }>({ context: null, nodes: new Map(), masterGain: null, inFlight: new Set() });
+  }>({ context: null, nodes: new Map(), masterGain: null, analyser: null, inFlight: new Set() });
 
   useEffect(() => {
     return () => {
@@ -661,7 +668,11 @@ function EditorPage() {
     if (!engine.context) {
       engine.context = getAudioContext();
       engine.masterGain = engine.context.createGain();
-      engine.masterGain.connect(engine.context.destination);
+      engine.analyser = engine.context.createAnalyser();
+      engine.analyser.fftSize = 1024;
+      engine.analyser.smoothingTimeConstant = 0.6;
+      engine.masterGain.connect(engine.analyser);
+      engine.analyser.connect(engine.context.destination);
     }
     if (engine.context.state === "suspended") engine.context.resume().catch(() => {});
 
@@ -905,7 +916,19 @@ function EditorPage() {
     return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
   }, [dragState, audioClips, clips, snapTime]);
 
-  // Global keyboard shortcuts: Space, S, Delete/Backspace, Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z
+  // Drop a marker at the current playhead position
+  const dropMarker = useCallback(() => {
+    setMarkers((m) => {
+      // Don't duplicate a marker that's within 0.1s of an existing one
+      if (m.some((x) => Math.abs(x.time - currentTime) < 0.1)) return m;
+      const next = [...m, { id: crypto.randomUUID(), time: currentTime, label: `M${m.length + 1}`, color: "#fbbf24" }];
+      next.sort((a, b) => a.time - b.time);
+      return next;
+    });
+    toast.success(`Marker dropped at ${formatTime(currentTime)}`);
+  }, [currentTime]);
+
+  // Pro keyboard shortcuts — Premiere/Resolve style
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -918,13 +941,72 @@ function EditorPage() {
         return;
       }
       if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
-      if (e.key === " " || e.code === "Space") { e.preventDefault(); setPlaying((p) => !p); return; }
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        shuttleSpeedRef.current = 1;
+        setPlaying((p) => !p);
+        return;
+      }
+      // J / K / L shuttle
+      if (e.key === "k" || e.key === "K") {
+        e.preventDefault();
+        shuttleSpeedRef.current = 1;
+        setPlaying(false);
+        return;
+      }
+      if (e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        const cur = shuttleSpeedRef.current;
+        const next = cur > 0 ? Math.min(cur * 2, 16) : 1;
+        shuttleSpeedRef.current = next;
+        setPlaying(true);
+        if (next > 1) toast.message(`Shuttle ${next}x`, { duration: 600 });
+        return;
+      }
+      if (e.key === "j" || e.key === "J") {
+        e.preventDefault();
+        const cur = shuttleSpeedRef.current;
+        const next = cur < 0 ? Math.max(cur * 2, -16) : -1;
+        shuttleSpeedRef.current = next;
+        setPlaying(true);
+        toast.message(`Shuttle ${next}x`, { duration: 600 });
+        return;
+      }
+      // Marker
+      if (e.key === "m" || e.key === "M") { e.preventDefault(); dropMarker(); return; }
+      // Frame-by-frame nudge
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const step = e.shiftKey ? 1 : 1 / 30;
+        setPlaying(false);
+        setCurrentTime((t) => Math.max(0, t - step));
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const step = e.shiftKey ? 1 : 1 / 30;
+        setPlaying(false);
+        setCurrentTime((t) => Math.min(totalDurationRef.current, t + step));
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        setPlaying(false);
+        setCurrentTime(0);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        setPlaying(false);
+        setCurrentTime(totalDurationRef.current);
+        return;
+      }
       if (e.key === "s" || e.key === "S") { e.preventDefault(); splitClipRef.current?.(); return; }
       if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteClipRef.current?.(); return; }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [undo, redo]);
+  }, [undo, redo, dropMarker]);
 
 
   function addAudioTrack() {
@@ -1498,7 +1580,7 @@ function EditorPage() {
               <Button size="sm" variant="ghost" onClick={addAudioTrack}>
                 <Plus className="size-3.5" /> Add Audio Track
               </Button>
-              <span className="text-[10px] text-studio-muted ml-2">Space play · S split · Del remove · ⌘Z undo</span>
+              <span className="text-[10px] text-studio-muted ml-2">Space play · J/K/L shuttle · ←/→ nudge frame (⇧=1s) · M marker · S split · Del remove · Home/End</span>
             </div>
           ) : (
             <div className="text-xs text-studio-muted">Click a frame to jump to that time</div>
@@ -1520,7 +1602,7 @@ function EditorPage() {
             }}
           >
             {/* Time ruler */}
-            <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} />
+            <TimelineRuler totalDuration={totalDuration} onSeek={handleSeek} markers={markers} onMarkerDelete={(id) => setMarkers((m) => m.filter((x) => x.id !== id))} />
 
             {/* Video tracks (top) */}
             {Array.from({ length: videoTrackCount }).map((_, ti) => (
@@ -1685,6 +1767,15 @@ function EditorPage() {
                 <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-yellow-400 rounded-full" />
               </div>
             )}
+
+            {/* Marker full-height guide lines */}
+            {markers.map((m) => (
+              <div
+                key={`mline-${m.id}`}
+                className="absolute top-6 bottom-0 w-px pointer-events-none z-10"
+                style={{ left: `${80 + m.time * PX_PER_SEC}px`, background: `${m.color}55` }}
+              />
+            ))}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-4">
@@ -1883,7 +1974,17 @@ function TimelineRow({ label, children, height = "h-12", labelColor, bgColor }: 
   );
 }
 
-function TimelineRuler({ totalDuration, onSeek }: { totalDuration: number; onSeek: (t: number) => void }) {
+function TimelineRuler({
+  totalDuration,
+  onSeek,
+  markers = [],
+  onMarkerDelete,
+}: {
+  totalDuration: number;
+  onSeek: (t: number) => void;
+  markers?: Marker[];
+  onMarkerDelete?: (id: string) => void;
+}) {
   // Pick a tick interval that gives ~80px between major ticks.
   const target = 80 / PX_PER_SEC;
   const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
@@ -1922,6 +2023,23 @@ function TimelineRuler({ totalDuration, onSeek }: { totalDuration: number; onSee
             </div>
           );
         })}
+        {markers.map((m) => (
+          <button
+            key={m.id}
+            onClick={(e) => { e.stopPropagation(); onSeek(m.time); }}
+            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onMarkerDelete?.(m.id); }}
+            title={`${m.label} @ ${formatRuler(m.time)} — click to seek, right-click to delete`}
+            className="absolute -top-0.5 z-10 -translate-x-1/2 flex flex-col items-center group"
+            style={{ left: `${m.time * PX_PER_SEC}px` }}
+          >
+            <span
+              className="text-[8px] font-bold leading-none px-1 py-0.5 rounded-sm shadow-sm text-black"
+              style={{ background: m.color }}
+            >
+              {m.label}
+            </span>
+          </button>
+        ))}
       </div>
     </div>
   );
