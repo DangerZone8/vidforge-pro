@@ -245,7 +245,7 @@ function EditorPage() {
       );
       const { error } = await supabase.from("projects").update({
         title, duration_seconds: totalDuration,
-        timeline_state: { clips, audioClips, overlays, adjustments: adj, viewMode } as any,
+        timeline_state: { clips, audioClips, overlays, adjustments: adj, viewMode, markers } as any,
       }).eq("id", projectId);
       if (error) throw error;
     },
