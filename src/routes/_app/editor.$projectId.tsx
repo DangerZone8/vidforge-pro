@@ -1767,6 +1767,15 @@ function EditorPage() {
                 <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-yellow-400 rounded-full" />
               </div>
             )}
+
+            {/* Marker full-height guide lines */}
+            {markers.map((m) => (
+              <div
+                key={`mline-${m.id}`}
+                className="absolute top-6 bottom-0 w-px pointer-events-none z-10"
+                style={{ left: `${80 + m.time * PX_PER_SEC}px`, background: `${m.color}55` }}
+              />
+            ))}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-4">
