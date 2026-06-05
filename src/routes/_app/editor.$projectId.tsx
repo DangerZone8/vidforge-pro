@@ -1965,7 +1965,17 @@ function TimelineRow({ label, children, height = "h-12", labelColor, bgColor }: 
   );
 }
 
-function TimelineRuler({ totalDuration, onSeek }: { totalDuration: number; onSeek: (t: number) => void }) {
+function TimelineRuler({
+  totalDuration,
+  onSeek,
+  markers = [],
+  onMarkerDelete,
+}: {
+  totalDuration: number;
+  onSeek: (t: number) => void;
+  markers?: Marker[];
+  onMarkerDelete?: (id: string) => void;
+}) {
   // Pick a tick interval that gives ~80px between major ticks.
   const target = 80 / PX_PER_SEC;
   const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
@@ -2004,6 +2014,23 @@ function TimelineRuler({ totalDuration, onSeek }: { totalDuration: number; onSee
             </div>
           );
         })}
+        {markers.map((m) => (
+          <button
+            key={m.id}
+            onClick={(e) => { e.stopPropagation(); onSeek(m.time); }}
+            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onMarkerDelete?.(m.id); }}
+            title={`${m.label} @ ${formatRuler(m.time)} — click to seek, right-click to delete`}
+            className="absolute -top-0.5 z-10 -translate-x-1/2 flex flex-col items-center group"
+            style={{ left: `${m.time * PX_PER_SEC}px` }}
+          >
+            <span
+              className="text-[8px] font-bold leading-none px-1 py-0.5 rounded-sm shadow-sm text-black"
+              style={{ background: m.color }}
+            >
+              {m.label}
+            </span>
+          </button>
+        ))}
       </div>
     </div>
   );
