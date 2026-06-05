@@ -640,8 +640,9 @@ function EditorPage() {
     context: AudioContext | null;
     nodes: Map<string, { source: AudioBufferSourceNode; gain: GainNode; started: boolean }>;
     masterGain: GainNode | null;
+    analyser: AnalyserNode | null;
     inFlight: Set<string>;
-  }>({ context: null, nodes: new Map(), masterGain: null, inFlight: new Set() });
+  }>({ context: null, nodes: new Map(), masterGain: null, analyser: null, inFlight: new Set() });
 
   useEffect(() => {
     return () => {
@@ -667,7 +668,11 @@ function EditorPage() {
     if (!engine.context) {
       engine.context = getAudioContext();
       engine.masterGain = engine.context.createGain();
-      engine.masterGain.connect(engine.context.destination);
+      engine.analyser = engine.context.createAnalyser();
+      engine.analyser.fftSize = 1024;
+      engine.analyser.smoothingTimeConstant = 0.6;
+      engine.masterGain.connect(engine.analyser);
+      engine.analyser.connect(engine.context.destination);
     }
     if (engine.context.state === "suspended") engine.context.resume().catch(() => {});
 
