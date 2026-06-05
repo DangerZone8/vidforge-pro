@@ -141,6 +141,8 @@ function EditorPage() {
   const [isProcessingVfx, setIsProcessingVfx] = useState(false);
   const [brushEditing, setBrushEditing] = useState(false);
   const [kfProp, setKfProp] = useState<KfProp>("opacity");
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const shuttleSpeedRef = useRef(1); // 1 = normal forward, -1 = reverse, 2/4/8/16 = JKL shuttle
   const primaryVideoRef = useRef<HTMLVideoElement | null>(null);
   const splitClipRef = useRef<(() => void) | null>(null);
   const deleteClipRef = useRef<(() => void) | null>(null);
