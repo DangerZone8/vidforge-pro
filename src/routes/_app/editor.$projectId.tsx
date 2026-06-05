@@ -1580,7 +1580,7 @@ function EditorPage() {
               <Button size="sm" variant="ghost" onClick={addAudioTrack}>
                 <Plus className="size-3.5" /> Add Audio Track
               </Button>
-              <span className="text-[10px] text-studio-muted ml-2">Space play · S split · Del remove · ⌘Z undo</span>
+              <span className="text-[10px] text-studio-muted ml-2">Space play · J/K/L shuttle · ←/→ nudge frame (⇧=1s) · M marker · S split · Del remove · Home/End</span>
             </div>
           ) : (
             <div className="text-xs text-studio-muted">Click a frame to jump to that time</div>
