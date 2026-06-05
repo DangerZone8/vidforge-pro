@@ -269,14 +269,22 @@ function EditorPage() {
     }
   }
 
-  function findAvailableAudioTrack(duration: number): number {
+  function findAvailableAudioTrack(_duration: number): number {
+    // Each new audio clip lands on its OWN lane. Find the lowest-index lane
+    // that currently has no clips. Only fall back to packing into an existing
+    // lane once every lane up to MAX_AUDIO_TRACKS is in use.
     for (let t = 0; t < MAX_AUDIO_TRACKS; t++) {
       const trackClips = audioClips.filter((a) => a.track === t);
       if (trackClips.length === 0) return t;
-      const start = nextAvailableStartOnAudioTrack(t, duration);
-      if (start <= 0.1) return t;
     }
-    return 0;
+    // All lanes used — fall back to the lane with the earliest free slot
+    let best = 0;
+    let bestStart = Infinity;
+    for (let t = 0; t < MAX_AUDIO_TRACKS; t++) {
+      const start = nextAvailableStartOnAudioTrack(t, _duration);
+      if (start < bestStart) { bestStart = start; best = t; }
+    }
+    return best;
   }
 
   // ---- Media upload ----
@@ -1603,7 +1611,8 @@ function EditorPage() {
 
             {/* Audio tracks (below video) */}
             {Array.from({ length: audioTrackCount }).map((_, ti) => (
-              <TimelineRow key={`a${ti}`} label={`A${ti + 1}`} height="h-10" labelColor="text-blue-400" bgColor="bg-blue-500/5">
+              <TimelineRow key={`a${ti}`} label={`Audio ${ti + 1}`} height="h-10" labelColor="text-blue-400" bgColor="bg-blue-500/5">
+
                 {audioClips
                   .filter((a) => a.track === ti)
                   .map((a) => (
