@@ -616,10 +616,12 @@ function EditorPage() {
       if (playing) {
         const dt = (timestamp - playbackRef.current.lastTime) / 1000;
         playbackRef.current.lastTime = timestamp;
+        const speed = shuttleSpeedRef.current || 1;
         setCurrentTime((t) => {
-          const nt = t + dt;
+          const nt = t + dt * speed;
           const td = totalDurationRef.current;
-          if (nt >= td) { setPlaying(false); return td; }
+          if (nt >= td) { setPlaying(false); shuttleSpeedRef.current = 1; return td; }
+          if (nt <= 0) { setPlaying(false); shuttleSpeedRef.current = 1; return 0; }
           return nt;
         });
       } else {
