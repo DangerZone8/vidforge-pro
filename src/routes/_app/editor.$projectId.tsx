@@ -1611,7 +1611,8 @@ function EditorPage() {
 
             {/* Audio tracks (below video) */}
             {Array.from({ length: audioTrackCount }).map((_, ti) => (
-              <TimelineRow key={`a${ti}`} label={`A${ti + 1}`} height="h-10" labelColor="text-blue-400" bgColor="bg-blue-500/5">
+              <TimelineRow key={`a${ti}`} label={`Audio ${ti + 1}`} height="h-10" labelColor="text-blue-400" bgColor="bg-blue-500/5">
+
                 {audioClips
                   .filter((a) => a.track === ti)
                   .map((a) => (
