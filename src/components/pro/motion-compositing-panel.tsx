@@ -28,7 +28,7 @@ export function MotionCompositingPanel() {
   const [speedRamp, setSpeedRamp] = useState({ start: 100, peak: 25, end: 100, easing: "ease-in-out" });
   const [maskShape, setMaskShape] = useState<"rect" | "ellipse" | "free">("ellipse");
   const [maskFeather, setMaskFeather] = useState(20);
-  const [trackPoint, setTrackPoint] = useState<{ x: number; y: number } | null>(null);
+  const [trackPoint, _setTrackPoint] = useState<{ x: number; y: number } | null>(null);
 
   const chroma = bridge.chromaKey ?? { enabled: false, color: "#00ff00", threshold: 40, smoothing: 10 };
 
