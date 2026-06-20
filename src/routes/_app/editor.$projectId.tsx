@@ -21,7 +21,7 @@ import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
 import { processVfxJob, type VfxJob, presetToJob, matchVfxPreset } from "@/lib/ai-vfx-engine";
 import { ProDock } from "@/components/pro/pro-dock";
-import { proBridge } from "@/lib/pro-bridge";
+import { proBridge, useProBridge } from "@/lib/pro-bridge";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
@@ -779,8 +779,8 @@ function EditorPage() {
   const baseFilter = activePreset
     ? adjustmentsToCss(effectiveAdj)
     : `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
-  const proExtraFilter = proBridge.state.extraFilter;
-  const filterStyle = proExtraFilter ? `${baseFilter} ${proExtraFilter}` : baseFilter;
+  const proState = useProBridge();
+  const filterStyle = proState.extraFilter ? `${baseFilter} ${proState.extraFilter}` : baseFilter;
 
   // Publish editor state to the pro bridge so floating panels can interact.
   useEffect(() => {
