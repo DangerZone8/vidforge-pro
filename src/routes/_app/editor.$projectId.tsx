@@ -20,6 +20,8 @@ import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ
 import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
 import { processVfxJob, type VfxJob, presetToJob, matchVfxPreset } from "@/lib/ai-vfx-engine";
+import { ProDock } from "@/components/pro/pro-dock";
+import { proBridge, useProBridge } from "@/lib/pro-bridge";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
@@ -774,9 +776,32 @@ function EditorPage() {
 
   const activePreset = getPreset(activeClip?.vfxPresetId);
   const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
-  const filterStyle = activePreset
+  const baseFilter = activePreset
     ? adjustmentsToCss(effectiveAdj)
     : `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+  const proState = useProBridge();
+  const filterStyle = proState.extraFilter ? `${baseFilter} ${proState.extraFilter}` : baseFilter;
+
+  // Publish editor state to the pro bridge so floating panels can interact.
+  useEffect(() => {
+    proBridge.publishState({
+      selectedClipId,
+      currentTime,
+      totalDuration: clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
+      clipIds: clips.map((c) => c.id),
+      audioClipIds: audioClips.map((a) => a.id),
+    });
+  }, [selectedClipId, currentTime, clips, audioClips]);
+
+  useEffect(() => {
+    proBridge.publishSetters({
+      patchClip: (id, patch) => setClips((all) => all.map((c) => c.id === id ? { ...c, ...patch } : c)),
+      setSelected: (id) => setSelectedClipId(id),
+      seek: (t) => setCurrentTime(t),
+      splitAt: () => {},
+      addMarker: () => {},
+    });
+  }, []);
 
   async function handleApplyVfx(job: VfxJob, presetName: string) {
     if (!selectedClip || !selectedClip.url) { toast.error("Select a video clip first"); return; }
@@ -1819,6 +1844,7 @@ function EditorPage() {
         overlays={overlays}
         adjustments={adj}
       />
+      <ProDock />
     </div>
   );
 }
