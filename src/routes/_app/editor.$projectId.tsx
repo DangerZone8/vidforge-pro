@@ -20,6 +20,8 @@ import { VFX_PRESETS, getPreset, adjustmentsToCss, type VfxCategory, DEFAULT_ADJ
 import { SOUND_LIBRARY } from "@/lib/sound-library";
 import { decodeAudio, getAudioContext } from "@/lib/audio-utils";
 import { processVfxJob, type VfxJob, presetToJob, matchVfxPreset } from "@/lib/ai-vfx-engine";
+import { ProDock } from "@/components/pro/pro-dock";
+import { proBridge } from "@/lib/pro-bridge";
 
 export const Route = createFileRoute("/_app/editor/$projectId")({
   component: EditorPage,
@@ -1819,6 +1821,7 @@ function EditorPage() {
         overlays={overlays}
         adjustments={adj}
       />
+      <ProDock />
     </div>
   );
 }
