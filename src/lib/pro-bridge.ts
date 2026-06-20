@@ -66,7 +66,7 @@ let setters: Setters = {
   setExtraFilter: (css) => { state = { ...state, extraFilter: css }; emit(); },
   setLutForClip: (id, url) => { state = { ...state, lutByClip: { ...state.lutByClip, [id]: url } }; emit(); },
   setMaster: (m) => { state = { ...state, master: { ...state.master, ...m } }; emit(); },
-  setTrackMix: (t, m) => { state = { ...state, trackMix: { ...state.trackMix, [t]: { gain: 1, pan: 0, muted: false, solo: false, ...state.trackMix[t], ...m } } }; emit(); },
+  setTrackMix: (t, m) => { state = { ...state, trackMix: { ...state.trackMix, [t]: { ...{ gain: 1, pan: 0, muted: false, solo: false }, ...state.trackMix[t], ...m } } }; emit(); },
   setChromaKey: (k) => { state = { ...state, chromaKey: k }; emit(); },
   setCaptions: (c) => { state = { ...state, captions: c }; emit(); },
 };
