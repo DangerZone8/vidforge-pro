@@ -776,9 +776,32 @@ function EditorPage() {
 
   const activePreset = getPreset(activeClip?.vfxPresetId);
   const effectiveAdj = activePreset ? { ...DEFAULT_ADJ, ...activePreset.adjustments } : adj;
-  const filterStyle = activePreset
+  const baseFilter = activePreset
     ? adjustmentsToCss(effectiveAdj)
     : `brightness(${adj.brightness}%) contrast(${adj.contrast}%) saturate(${adj.saturation}%) blur(${adj.blur}px)`;
+  const proExtraFilter = proBridge.state.extraFilter;
+  const filterStyle = proExtraFilter ? `${baseFilter} ${proExtraFilter}` : baseFilter;
+
+  // Publish editor state to the pro bridge so floating panels can interact.
+  useEffect(() => {
+    proBridge.publishState({
+      selectedClipId,
+      currentTime,
+      totalDuration: clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0),
+      clipIds: clips.map((c) => c.id),
+      audioClipIds: audioClips.map((a) => a.id),
+    });
+  }, [selectedClipId, currentTime, clips, audioClips]);
+
+  useEffect(() => {
+    proBridge.publishSetters({
+      patchClip: (id, patch) => setClips((all) => all.map((c) => c.id === id ? { ...c, ...patch } : c)),
+      setSelected: (id) => setSelectedClipId(id),
+      seek: (t) => setCurrentTime(t),
+      splitAt: () => {},
+      addMarker: () => {},
+    });
+  }, []);
 
   async function handleApplyVfx(job: VfxJob, presetName: string) {
     if (!selectedClip || !selectedClip.url) { toast.error("Select a video clip first"); return; }
