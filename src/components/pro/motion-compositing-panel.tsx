@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Diamond, Target, Layers as LayersIcon, Gauge, ArrowRightLeft, Scissors } from "lucide-react";
+import { Diamond, Target, Gauge, ArrowRightLeft } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { proBridge, useProBridge } from "@/lib/pro-bridge";
