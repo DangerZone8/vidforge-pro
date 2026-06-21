@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, Video, Headphones, Undo2, Redo2, Brush, Layers, Diamond, Eye, EyeOff, Lock, Clock as Unlock, GripVertical } from "lucide-react";
+import { ArrowLeft, Upload, Play, Pause, Type, Download, Loader as Loader2, Film, Music, Image as ImageIcon, Scissors, Trash2, Wand as Wand2, Volume2, VolumeX, Plus, Library, LayoutGrid, Clock, Split, Video, Headphones, Undo2, Redo2, Brush, Layers, Diamond, Eye, EyeOff, Lock, Unlock, GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ExportDialog } from "@/components/export-dialog";
@@ -1292,10 +1292,6 @@ function EditorPage() {
               {/* Video/image preview — all active clips render together */}
               {activeClips.filter((c) => !c.hidden).map((clip, idx) => {
                 const kf = getKfProps(clip, currentTime);
-                const clipPreset = getPreset(clip.vfxPresetId);
-                const clipFilter = clipPreset
-                  ? adjustmentsToCss({ ...DEFAULT_ADJ, ...clipPreset.adjustments })
-                  : baseFilter;
                 return (
                   <div
                     key={clip.id}
@@ -1308,12 +1304,12 @@ function EditorPage() {
                     }}
                   >
                     {clip.kind === "image" ? (
-                      <ClipImagePlayer clip={clip} filterStyle={clipFilter} />
+                      <ClipImagePlayer clip={clip} filterStyle={filterStyle} />
                     ) : (
-                      <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={clipFilter} videoElRef={idx === 0 ? primaryVideoRef : undefined} />
+                      <ClipVideoPlayer clip={clip} currentTime={currentTime} playing={playing} muted={idx > 0 || !!clip.muteOriginal} filterStyle={filterStyle} videoElRef={idx === 0 ? primaryVideoRef : undefined} />
                     )}
-                    {clipPreset && clipPreset.overlay !== "none" && (
-                      <VfxOverlay kind={clipPreset.overlay} color={clipPreset.overlayColor} intensity={clipPreset.intensity} playing={playing} />
+                    {activePreset && activePreset.overlay !== "none" && (
+                      <VfxOverlay kind={activePreset.overlay} color={activePreset.overlayColor} intensity={activePreset.intensity} playing={playing} />
                     )}
                   </div>
                 );
