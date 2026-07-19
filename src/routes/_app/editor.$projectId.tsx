@@ -1888,6 +1888,24 @@ function EditorPage() {
         adjustments={adj}
       />
       <ProDock />
+      {pendingTrendModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 backdrop-blur">
+          <div className="w-[420px] rounded-2xl bg-studio-bg border border-studio-border p-6 shadow-2xl">
+            <div className="flex items-center gap-2 mb-1">
+              <Wand2 className="size-4 text-studio-accent" />
+              <div className="font-medium">Applying "{pendingTrendModal.trendName}" trend</div>
+            </div>
+            <div className="text-xs text-studio-muted mb-4">AI is processing your video</div>
+            <div className="h-2 rounded-full bg-studio-surface overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-500"
+                style={{ width: `${pendingTrendModal.progress}%` }}
+              />
+            </div>
+            <div className="text-xs text-studio-muted mt-2 font-mono">{pendingTrendModal.step}</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
