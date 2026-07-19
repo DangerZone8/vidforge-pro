@@ -1,12 +1,13 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutGrid, Video, Film, LogOut } from "lucide-react";
+import { LayoutGrid, Video, Sparkles, LogOut } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 const items = [
   { to: "/dashboard", icon: LayoutGrid, label: "Projects" },
   { to: "/record", icon: Video, label: "Record" },
-];
+  { to: "/trends", icon: Sparkles, label: "Trends" },
+] as const;
 
 export function AppSidebar() {
   const path = useRouterState({ select: (r) => r.location.pathname });
