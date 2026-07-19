@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { TRENDS, setPendingTrend, type Trend } from "@/lib/trends";
+import { TRENDS, TREND_CATEGORIES, setPendingTrend, type Trend } from "@/lib/trends";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
