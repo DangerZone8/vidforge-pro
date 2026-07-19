@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppTrendsRouteImport } from './routes/_app/trends'
 import { Route as AppRecordRouteImport } from './routes/_app/record'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as ApiPublicAudioProxyRouteImport } from './routes/api/public/audio-proxy'
@@ -30,6 +31,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppTrendsRoute = AppTrendsRouteImport.update({
+  id: '/trends',
+  path: '/trends',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppRecordRoute = AppRecordRouteImport.update({
   id: '/record',
@@ -57,6 +63,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/dashboard': typeof AppDashboardRoute
   '/record': typeof AppRecordRoute
+  '/trends': typeof AppTrendsRoute
   '/editor/$projectId': typeof AppEditorProjectIdRoute
   '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
 }
@@ -65,6 +72,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/dashboard': typeof AppDashboardRoute
   '/record': typeof AppRecordRoute
+  '/trends': typeof AppTrendsRoute
   '/editor/$projectId': typeof AppEditorProjectIdRoute
   '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
 }
@@ -75,6 +83,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/record': typeof AppRecordRoute
+  '/_app/trends': typeof AppTrendsRoute
   '/_app/editor/$projectId': typeof AppEditorProjectIdRoute
   '/api/public/audio-proxy': typeof ApiPublicAudioProxyRoute
 }
@@ -85,6 +94,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/dashboard'
     | '/record'
+    | '/trends'
     | '/editor/$projectId'
     | '/api/public/audio-proxy'
   fileRoutesByTo: FileRoutesByTo
@@ -93,6 +103,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/dashboard'
     | '/record'
+    | '/trends'
     | '/editor/$projectId'
     | '/api/public/audio-proxy'
   id:
@@ -102,6 +113,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/_app/dashboard'
     | '/_app/record'
+    | '/_app/trends'
     | '/_app/editor/$projectId'
     | '/api/public/audio-proxy'
   fileRoutesById: FileRoutesById
@@ -135,6 +147,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/trends': {
+      id: '/_app/trends'
+      path: '/trends'
+      fullPath: '/trends'
+      preLoaderRoute: typeof AppTrendsRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/record': {
       id: '/_app/record'
@@ -170,12 +189,14 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
   AppRecordRoute: typeof AppRecordRoute
+  AppTrendsRoute: typeof AppTrendsRoute
   AppEditorProjectIdRoute: typeof AppEditorProjectIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
   AppRecordRoute: AppRecordRoute,
+  AppTrendsRoute: AppTrendsRoute,
   AppEditorProjectIdRoute: AppEditorProjectIdRoute,
 }
 
