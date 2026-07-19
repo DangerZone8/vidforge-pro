@@ -226,6 +226,8 @@ function EditorPage() {
     },
   });
 
+  const [pendingTrendModal, setPendingTrendModal] = useState<{ trendName: string; step: string; progress: number } | null>(null);
+
   useEffect(() => {
     if (project) {
       setTitle(project.title);
@@ -238,6 +240,47 @@ function EditorPage() {
       if (ts?.markers) setMarkers(ts.markers);
     }
   }, [project]);
+
+  // Auto-apply a pending trend (queued from /trends page)
+  useEffect(() => {
+    if (!project || clips.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const { consumePendingTrend, getTrend } = await import("@/lib/trends");
+      const pending = consumePendingTrend();
+      if (!pending || cancelled) return;
+      const trend = getTrend(pending.trendId);
+      if (!trend) return;
+      const steps = [
+        { label: "Analyzing video…", ms: 700 },
+        { label: "Removing background…", ms: 900 },
+        { label: `Applying ${trend.name} scene…`, ms: 800 },
+        { label: "Rendering color grade…", ms: 700 },
+      ];
+      let p = 0;
+      for (const s of steps) {
+        if (cancelled) return;
+        setPendingTrendModal({ trendName: trend.name, step: s.label, progress: p });
+        await new Promise((r) => setTimeout(r, s.ms));
+        p += 25;
+      }
+      if (cancelled) return;
+      const videoClipIds = clips.filter((c) => c.kind === "video").map((c) => c.id);
+      const targetIds = videoClipIds.length ? videoClipIds : clips.map((c) => c.id);
+      setClips((all) => all.map((c) => targetIds.includes(c.id) ? {
+        ...c,
+        vfxPresetId: trend.presetId,
+        bgRemove: trend.bgRemove,
+        bgMode: "color" as const,
+        bgColor: trend.bgColor,
+      } : c));
+      setPendingTrendModal({ trendName: trend.name, step: "Done", progress: 100 });
+      setTimeout(() => setPendingTrendModal(null), 600);
+      toast.success(`"${trend.name}" trend applied`);
+    })();
+    return () => { cancelled = true; };
+  }, [project, clips.length]);
+
 
   const saveProject = useMutation({
     mutationFn: async () => {
