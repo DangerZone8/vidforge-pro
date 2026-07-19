@@ -226,6 +226,8 @@ function EditorPage() {
     },
   });
 
+  const [pendingTrendModal, setPendingTrendModal] = useState<{ trendName: string; step: string; progress: number } | null>(null);
+
   useEffect(() => {
     if (project) {
       setTitle(project.title);
@@ -238,6 +240,47 @@ function EditorPage() {
       if (ts?.markers) setMarkers(ts.markers);
     }
   }, [project]);
+
+  // Auto-apply a pending trend (queued from /trends page)
+  useEffect(() => {
+    if (!project || clips.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const { consumePendingTrend, getTrend } = await import("@/lib/trends");
+      const pending = consumePendingTrend();
+      if (!pending || cancelled) return;
+      const trend = getTrend(pending.trendId);
+      if (!trend) return;
+      const steps = [
+        { label: "Analyzing video…", ms: 700 },
+        { label: "Removing background…", ms: 900 },
+        { label: `Applying ${trend.name} scene…`, ms: 800 },
+        { label: "Rendering color grade…", ms: 700 },
+      ];
+      let p = 0;
+      for (const s of steps) {
+        if (cancelled) return;
+        setPendingTrendModal({ trendName: trend.name, step: s.label, progress: p });
+        await new Promise((r) => setTimeout(r, s.ms));
+        p += 25;
+      }
+      if (cancelled) return;
+      const videoClipIds = clips.filter((c) => c.kind === "video").map((c) => c.id);
+      const targetIds = videoClipIds.length ? videoClipIds : clips.map((c) => c.id);
+      setClips((all) => all.map((c) => targetIds.includes(c.id) ? {
+        ...c,
+        vfxPresetId: trend.presetId,
+        bgRemove: trend.bgRemove,
+        bgMode: "color" as const,
+        bgColor: trend.bgColor,
+      } : c));
+      setPendingTrendModal({ trendName: trend.name, step: "Done", progress: 100 });
+      setTimeout(() => setPendingTrendModal(null), 600);
+      toast.success(`"${trend.name}" trend applied`);
+    })();
+    return () => { cancelled = true; };
+  }, [project, clips.length]);
+
 
   const saveProject = useMutation({
     mutationFn: async () => {
@@ -1845,6 +1888,24 @@ function EditorPage() {
         adjustments={adj}
       />
       <ProDock />
+      {pendingTrendModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 backdrop-blur">
+          <div className="w-[420px] rounded-2xl bg-studio-bg border border-studio-border p-6 shadow-2xl">
+            <div className="flex items-center gap-2 mb-1">
+              <Wand2 className="size-4 text-studio-accent" />
+              <div className="font-medium">Applying "{pendingTrendModal.trendName}" trend</div>
+            </div>
+            <div className="text-xs text-studio-muted mb-4">AI is processing your video</div>
+            <div className="h-2 rounded-full bg-studio-surface overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-500"
+                style={{ width: `${pendingTrendModal.progress}%` }}
+              />
+            </div>
+            <div className="text-xs text-studio-muted mt-2 font-mono">{pendingTrendModal.step}</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
