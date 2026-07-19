@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { TRENDS, setPendingTrend, type Trend } from "@/lib/trends";
+import { TRENDS, TREND_CATEGORIES, setPendingTrend, type Trend } from "@/lib/trends";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -40,29 +40,44 @@ function TrendsPage() {
         <div className="text-xs text-studio-muted">Pick a look — record live or apply to a video</div>
       </header>
 
-      <div className="p-6 max-w-7xl mx-auto">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {TRENDS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => { setSelected(t); setIntensity(80); }}
-              className="group relative aspect-[4/5] rounded-2xl overflow-hidden border border-studio-border hover:border-white/30 transition-all text-left"
-              style={{ background: t.gradient }}
-            >
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
-              <div className="absolute top-3 right-3 text-2xl drop-shadow-lg">{t.emoji}</div>
-              <div className="absolute bottom-0 left-0 right-0 p-4">
-                <div className="text-lg font-semibold text-white leading-tight">{t.name}</div>
-                <div className="text-xs text-white/70 mt-1">{t.tagline}</div>
-                <div
-                  className="mt-3 inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-white/15 backdrop-blur text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Sparkles className="size-3" /> Try trend
+      <div className="p-6 max-w-7xl mx-auto space-y-10">
+        {TREND_CATEGORIES.map((cat) => {
+          const items = TRENDS.filter((t) => t.category === cat.id);
+          if (!items.length) return null;
+          return (
+            <section key={cat.id}>
+              <div className="mb-4 flex items-baseline justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold tracking-tight">{cat.label}</h2>
+                  <p className="text-xs text-studio-muted mt-0.5">{cat.description}</p>
                 </div>
+                <span className="text-[10px] uppercase tracking-widest text-studio-muted">
+                  {items.length} looks
+                </span>
               </div>
-            </button>
-          ))}
-        </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {items.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => { setSelected(t); setIntensity(80); }}
+                    className="group relative aspect-[4/5] rounded-2xl overflow-hidden border border-studio-border hover:border-white/30 transition-all text-left"
+                    style={{ background: t.gradient }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+                    <div className="absolute top-3 right-3 text-2xl drop-shadow-lg">{t.emoji}</div>
+                    <div className="absolute bottom-0 left-0 right-0 p-4">
+                      <div className="text-lg font-semibold text-white leading-tight">{t.name}</div>
+                      <div className="text-xs text-white/75 mt-1 line-clamp-2">{t.tagline}</div>
+                      <div className="mt-3 inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-white/15 backdrop-blur text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Sparkles className="size-3" /> Try trend
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
 
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
