@@ -35,6 +35,24 @@ function RecordPage() {
   const [blob, setBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [trend, setTrend] = useState<Trend | null>(null);
+
+  useEffect(() => {
+    const pending = consumePendingTrend();
+    if (pending) {
+      const t = getTrend(pending.trendId);
+      if (t) {
+        setTrend(t);
+        // Re-queue so it also auto-applies when the recording is saved to a project
+        setPendingTrend(pending);
+        toast.success(`Trend Mode: ${t.name}`);
+      }
+    }
+  }, []);
+
+  const trendPreset = trend ? getPreset(trend.presetId) : null;
+  const trendFilterCss = trendPreset ? adjustmentsToCss(trendPreset.adjustments) : "";
+
 
   useEffect(() => () => cleanup(), []);
   useEffect(() => {
