@@ -217,17 +217,37 @@ function RecordPage() {
   return (
     <div className="flex flex-col min-h-screen">
       <header className="h-14 border-b border-studio-border flex items-center justify-between px-6">
-        <h1 className="font-medium">Record</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="font-medium">Record</h1>
+          {trend && (
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium text-white"
+              style={{ background: trend.gradient }}
+            >
+              <Sparkles className="size-3" />
+              Trend: {trend.name}
+              <button onClick={() => { setTrend(null); setPendingTrend(null); }} className="ml-1 opacity-70 hover:opacity-100">
+                <X className="size-3" />
+              </button>
+            </div>
+          )}
+        </div>
         <div className="text-xs text-studio-muted">Webcam, screen, or both — saved to a new project</div>
       </header>
 
       <div className="flex-1 grid lg:grid-cols-[1fr_320px] gap-6 p-6 max-w-7xl w-full mx-auto">
         <div className="space-y-4">
-          <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-studio-border">
+          <div
+            className="relative aspect-video rounded-xl overflow-hidden border border-studio-border"
+            style={{ background: trend ? trend.bgColor : "#000" }}
+          >
             {status === "preview" ? (
-              <video ref={previewRef} src={previewUrl} controls className="w-full h-full" />
+              <video ref={previewRef} src={previewUrl} controls className="w-full h-full" style={trendFilterCss ? { filter: trendFilterCss } : undefined} />
             ) : (
-              <video ref={videoRef} muted autoPlay playsInline className="w-full h-full object-cover" />
+              <video ref={videoRef} muted autoPlay playsInline className="w-full h-full object-cover" style={trendFilterCss ? { filter: trendFilterCss } : undefined} />
+            )}
+            {trend && (
+              <div className="pointer-events-none absolute inset-0" style={{ boxShadow: `inset 0 0 120px ${trend.accent}55` }} />
             )}
             {status === "countdown" && (
               <div className="absolute inset-0 grid place-items-center bg-black/60">
@@ -241,6 +261,7 @@ function RecordPage() {
               </div>
             )}
           </div>
+
 
           <div className="flex items-center justify-center gap-3">
             {status === "idle" && (
